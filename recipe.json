@@ -1,0 +1,93 @@
+{
+  "id": "options-lifecycle",
+  "version": 1,
+  "description": "Watch one yield note to expiry: a heads-up the day before, the outcome the moment it settles, and - if the owner asked for it - buying the asset they have just agreed to buy.",
+  "keywords": [
+    "yield note",
+    "option",
+    "expiry",
+    "settlement",
+    "assigned",
+    "covered call",
+    "cash secured put",
+    "roll"
+  ],
+  "triggers": [
+    "timer"
+  ],
+  "keys": [
+    "note:<duty>:deliver"
+  ],
+  "params": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "INSTRUMENT",
+      "PRODUCT",
+      "UNDERLYING",
+      "STRIKE",
+      "SIZE",
+      "PREMIUM_USD"
+    ],
+    "properties": {
+      "INSTRUMENT": {
+        "type": "string",
+        "description": "Derive's own name for the option sold, exactly as it was filled: ETH-20261030-2450-P. The expiry and strike are read back out of this, so it must match the fill.",
+        "minLength": 8,
+        "maxLength": 64
+      },
+      "PRODUCT": {
+        "type": "string",
+        "enum": [
+          "cash_secured_put",
+          "covered_call"
+        ],
+        "description": "Which note this is. A put ends in the owner buying the asset; a call ends in them selling it."
+      },
+      "UNDERLYING": {
+        "type": "string",
+        "description": "The asset ticker: ETH, BTC. Used for the settlement read and, if DELIVER_ASSET is on, the spot buy.",
+        "minLength": 2,
+        "maxLength": 12
+      },
+      "STRIKE": {
+        "type": "number",
+        "description": "The price the owner agreed to buy at (put) or sell at (call).",
+        "minimum": 1e-08
+      },
+      "SIZE": {
+        "type": "number",
+        "description": "Contracts sold, in units of the underlying.",
+        "minimum": 1e-08
+      },
+      "PREMIUM_USD": {
+        "type": "number",
+        "minimum": 0,
+        "description": "What the owner actually kept at open, after Derive's fee. This is the number quoted back to them at expiry, so it must be the net figure, not the gross."
+      },
+      "COLLATERAL_USD": {
+        "type": "number",
+        "minimum": 0,
+        "default": 0,
+        "description": "USDC locked behind a put. 0 for a covered call, which is collateralised by the asset itself."
+      },
+      "DELIVER_ASSET": {
+        "type": "boolean",
+        "default": false,
+        "description": "Only for a put that lands in the money. Derive settles in cash, so the owner is simply down money and holds no asset. With this on, the duty files a spot buy for SIZE of the underlying, which is what makes 'you now own it at the strike' true. Off by default: it spends money, so the owner has to have asked."
+      },
+      "CHAIN_ID": {
+        "type": "integer",
+        "default": 8453,
+        "description": "Chain for the DELIVER_ASSET buy: 1 Ethereum, 8453 Base, 42161 Arbitrum."
+      },
+      "HEADS_UP_HOURS": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 168,
+        "default": 24,
+        "description": "How long before expiry to send the heads-up. Sent once."
+      }
+    }
+  }
+}
