@@ -206,7 +206,12 @@ def heads_up():
 
 
 def outcome_sentences(settled):
-    """What actually happened, in the owner's terms. Returns (headline, assigned)."""
+    """What actually happened, in the owner's terms. Returns (headline, assigned).
+
+    The assigned-put headline deliberately says "agreed to buy", not "have
+    bought". Derive settles in cash, so until the delivery buy fills the owner
+    owns no asset - and settle() is the only thing that knows whether it did.
+    """
     if IS_PUT:
         if settled >= STRIKE:
             kept = COLLATERAL_USD or (STRIKE * SIZE)
@@ -215,8 +220,9 @@ def outcome_sentences(settled):
                        usd(kept), usd(PREMIUM_USD)), False)
         shortfall = (STRIKE - settled) * SIZE
         net = PREMIUM_USD - shortfall
-        return ("%s settled at %s, under your %s. You have bought %s %s at %s. "
-                "That is %s below the market, and after the %s premium you are %s %s."
+        return ("%s settled at %s, under your %s. Your note was assigned: you agreed "
+                "to buy %s %s at %s, which is %s more than they are worth today. "
+                "After the %s premium you are %s %s."
                 % (UNDERLYING, price(settled), price(STRIKE), fmt(SIZE), UNDERLYING,
                    price(STRIKE), usd(shortfall), usd(PREMIUM_USD),
                    "down" if net < 0 else "up", usd(abs(net))), True)
@@ -289,9 +295,12 @@ def settle():
         if DELIVER_ASSET:
             result = deliver()
             if result == "done":
-                tail = " I have bought the %s for you." % UNDERLYING
+                tail = (" I have bought it for you, so you now own %s %s."
+                        % (fmt(SIZE), UNDERLYING))
             elif result == "pending":
-                tail = " The purchase is waiting on your approval."
+                tail = (" Buying the %s is waiting on your approval - until that "
+                        "goes through you are holding the loss in cash, not the %s."
+                        % (UNDERLYING, UNDERLYING))
             elif result == "refused":
                 tail = (" I could not buy the %s - that part needs you."
                         % UNDERLYING)
@@ -299,8 +308,8 @@ def settle():
                 tail = (" I am not certain whether the %s purchase went through; "
                         "check before buying again." % UNDERLYING)
         else:
-            tail = (" Derive settles in cash, so you are holding the loss, not the %s. "
-                    "Say the word and I will buy it." % UNDERLYING)
+            tail = (" Derive settles in cash, so right now you are holding the loss, "
+                    "not the %s. Say the word and I will buy it." % UNDERLYING)
     elif not assigned:
         tail = " Want me to set up another one?"
 
