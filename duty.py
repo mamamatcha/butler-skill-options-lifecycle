@@ -1,22 +1,21 @@
 """Watch one yield note from open to outcome, and say what happened.
 
-A note is one option the owner sold, fully collateralised. Three moments
-matter and the owner should never have to ask about any of them:
+A note is one option the owner sold on Derive, fully collateralised. The
+yield-notes skill opens it and files this duty with the fill's own numbers.
+Three moments matter and the owner should never have to ask about any of them:
 
     the day before   where the asset is, and which way the note is leaning
-    settlement       what they kept, or what they have just bought
+    settlement       what they kept, or what they agreed to buy or sell
     after that       the asset itself, if they asked to actually own it
 
-Everything here reads Derive's **public** API. The note's own details arrive
-as settings when the duty is filed, and Derive publishes settlement prices
-openly, so the outcome needs no key, no session and no options rail. That is
-deliberate: the lifecycle works before the rail exists, and keeps working if
-a key is ever rotated out from under it.
+A duty has no network of its own, so the settlement price comes through the
+options rail (`bevo.read("/options/settlement")`) and the spot price through
+`/token-price`.
 
 Derive settles options in **cash**. An in-the-money put reduces USDC; it does
-not hand over ETH. So "you now own 2.04 ETH at $2,450" is only true when
-DELIVER_ASSET is on and the spot buy actually fills. Until then the duty says
-the owner is down money, because that is what has happened.
+not hand over ETH. So "you now own 2.04 ETH" is only true when DELIVER_ASSET is
+on and the spot buy actually executed. Until then the duty says the owner is
+holding the loss in cash, because that is what has happened.
 
 Settings: INSTRUMENT, PRODUCT, UNDERLYING, STRIKE, SIZE, PREMIUM_USD,
 COLLATERAL_USD, DELIVER_ASSET, CHAIN_ID, HEADS_UP_HOURS.
@@ -25,6 +24,7 @@ COLLATERAL_USD, DELIVER_ASSET, CHAIN_ID, HEADS_UP_HOURS.
 import bevo
 import datetime
 import json
+import math
 import os
 import re
 import subprocess
@@ -45,10 +45,6 @@ HEADS_UP_HOURS = float(PARAMS.get("HEADS_UP_HOURS") or 24)
 
 NAME = os.environ.get("BEVO_SERVICE_NAME") or "your note"
 
-#: Where the rail publishes the settlement price Derive printed for an
-#: expiry. A duty has no network of its own - everything goes through
-#: bevo.read - so this is the one thing the options rail must expose before
-#: the outcome half of this duty can work. The heads-up half works today.
 SETTLEMENT_PATH = "/options/settlement"
 
 #: Settlement is published shortly after the 08:00 UTC expiry, not at the
@@ -56,20 +52,11 @@ SETTLEMENT_PATH = "/options/settlement"
 #: missing price as a problem.
 SETTLE_GRACE_SECONDS = 20 * 60
 
-#: Past this with still no published price, say so out loud: a settlement
-#: that never lands is an incident, not a delay.
+#: Past this with still no price, say so out loud: a settlement that never
+#: lands is an incident, not a delay.
 SETTLE_ALARM_SECONDS = 6 * 3600
 
-#: exec_status states after which the delivery buy is no longer in flight.
-SETTLED_STATES = {
-    "executed", "failed", "refused", "rejected", "expired", "cancelled",
-    "canceled", "declined", "replay", "unknown",
-}
-
 PROBLEM = ""
-
-
-# --- small helpers -------------------------------------------------------------------------
 
 
 def say(text):
@@ -109,9 +96,6 @@ def answer_of(text):
     return value if isinstance(value, dict) else None
 
 
-# --- the note ------------------------------------------------------------------------------
-
-
 def parse_instrument(name):
     """Pull expiry and option type back out of ETH-20261030-2450-P.
 
@@ -123,9 +107,8 @@ def parse_instrument(name):
         return None
     _, yyyymmdd, _strike, kind = m.groups()
     try:
-        # Pinned to UTC explicitly. Derive expiries are 08:00 UTC, and reading
-        # them in the container's local zone would be an hour out under DST -
-        # enough to call settlement before it has happened.
+        # Pinned to UTC: read in a DST zone this is an hour out, enough to
+        # call settlement before it has happened.
         moment = datetime.datetime.strptime(yyyymmdd + " 08:00", "%Y%m%d %H:%M")
         expiry = int(moment.replace(tzinfo=datetime.timezone.utc).timestamp())
     except ValueError:
@@ -143,6 +126,8 @@ elif DETAIL["kind"] == "P" and PRODUCT != "cash_secured_put":
     PROBLEM = "%s is a put but PRODUCT says %s" % (INSTRUMENT, PRODUCT)
 elif DETAIL["kind"] == "C" and PRODUCT != "covered_call":
     PROBLEM = "%s is a call but PRODUCT says %s" % (INSTRUMENT, PRODUCT)
+elif not INSTRUMENT.startswith(UNDERLYING + "-"):
+    PROBLEM = "%s is not an option on UNDERLYING %s" % (INSTRUMENT, UNDERLYING)
 elif SIZE <= 0 or STRIKE <= 0:
     PROBLEM = "SIZE and STRIKE must both be above zero"
 
@@ -151,99 +136,99 @@ IS_PUT = PRODUCT == "cash_secured_put"
 
 
 def spot_now():
-    """What the underlying is worth right now. Existing endpoint."""
-    body = bevo.read("/token-price", {"symbol": UNDERLYING}) or {}
-    for field in ("price", "usd", "value"):
-        if body.get(field):
-            return float(body[field])
-    raise RuntimeError("no price for %s in /token-price" % UNDERLYING)
+    """What the underlying is worth right now."""
+    body = bevo.read("/token-price", {"q": UNDERLYING}) or {}
+    value = body.get("priceUsd")
+    if not value:
+        raise bevo.BevoError("no priceUsd for %s in /token-price" % UNDERLYING)
+    return float(value)
 
 
 def settlement_price():
     """The settlement Derive printed for this expiry.
 
-    None means not published yet. RuntimeError means the rail cannot answer
-    at all - a different thing, and the owner is told about it rather than
-    being given a guess.
+    None means not published yet. A BevoError means the rail cannot answer at
+    all — a different thing, and the owner is told about it rather than being
+    given a guess.
     """
     body = bevo.read(SETTLEMENT_PATH, {"underlying": UNDERLYING, "expiry": EXPIRY}) or {}
     value = body.get("price")
-    if value in (None, "", 0, "0"):
+    if value in (None, ""):
         return None
-    return float(value)
-
-
-# --- the three moments ---------------------------------------------------------------------
+    settled = float(value)
+    return settled if settled > 0 else None
 
 
 def heads_up():
     """Once, the day before: where the asset is and which way this is leaning."""
     try:
         spot = spot_now()
-    except Exception as exc:  # noqa: BLE001 - a missed heads-up must not kill the duty
+    except bevo.BevoError as exc:
         say("could not read the price for the heads-up: %s" % exc)
         return
 
     hours = max(0, (EXPIRY - time.time()) / 3600.0)
     if IS_PUT:
-        safe = spot >= STRIKE
-        leaning = ("looks set to pay out in full" if safe else
+        leaning = ("looks set to pay out in full" if spot >= STRIKE else
                    "is under your price, so you may end up buying %s at %s"
                    % (UNDERLYING, price(STRIKE)))
-        line = ("%s: %s is at %s. Your note %s. It settles in about %d hours."
-                % (NAME, UNDERLYING, price(spot), leaning, round(hours)))
     else:
-        safe = spot <= STRIKE
         leaning = ("looks set to pay out in full, and you keep your %s" % UNDERLYING
-                   if safe else
+                   if spot <= STRIKE else
                    "is above your price, so your %s may be sold at %s"
                    % (UNDERLYING, price(STRIKE)))
-        line = ("%s: %s is at %s. Your note %s. It settles in about %d hours."
+    bevo.notify("%s: %s is at %s. Your note %s. It settles in about %d hours."
                 % (NAME, UNDERLYING, price(spot), leaning, round(hours)))
-
-    bevo.notify(line[:500])
     bevo.state["heads_up_sent"] = True
 
 
 def outcome_sentences(settled):
     """What actually happened, in the owner's terms. Returns (headline, assigned).
 
-    The assigned-put headline deliberately says "agreed to buy", not "have
-    bought". Derive settles in cash, so until the delivery buy fills the owner
-    owns no asset - and settle() is the only thing that knows whether it did.
+    The assigned-put headline says "agreed to buy", not "have bought". Derive
+    settles in cash, so until the delivery buy executes the owner owns no
+    asset — and settle() is the only thing that knows whether it did.
     """
     if IS_PUT:
         if settled >= STRIKE:
             kept = COLLATERAL_USD or (STRIKE * SIZE)
-            return ("%s settled at %s, above your %s. You kept %s and the %s."
-                    % (UNDERLYING, price(settled), price(STRIKE),
-                       usd(kept), usd(PREMIUM_USD)), False)
+            return ("%s settled at %s, above your %s. You kept your %s and the %s premium."
+                    % (UNDERLYING, price(settled), price(STRIKE), usd(kept), usd(PREMIUM_USD)), False)
         shortfall = (STRIKE - settled) * SIZE
         net = PREMIUM_USD - shortfall
-        return ("%s settled at %s, under your %s. Your note was assigned: you agreed "
-                "to buy %s %s at %s, which is %s more than they are worth today. "
-                "After the %s premium you are %s %s."
+        return ("%s settled at %s, under your %s. Your note was assigned: you agreed to buy "
+                "%s %s at %s, which is %s more than they are worth today. After the %s premium "
+                "you are %s %s."
                 % (UNDERLYING, price(settled), price(STRIKE), fmt(SIZE), UNDERLYING,
                    price(STRIKE), usd(shortfall), usd(PREMIUM_USD),
                    "down" if net < 0 else "up", usd(abs(net))), True)
     if settled <= STRIKE:
-        return ("%s settled at %s, under your %s. You kept your %s and the %s."
-                % (UNDERLYING, price(settled), price(STRIKE), UNDERLYING,
-                   usd(PREMIUM_USD)), False)
+        return ("%s settled at %s, under your %s. You kept your %s and the %s premium."
+                % (UNDERLYING, price(settled), price(STRIKE), UNDERLYING, usd(PREMIUM_USD)), False)
     given_up = (settled - STRIKE) * SIZE
-    return ("%s settled at %s, above your %s. Your %s %s sold at %s. You gave up %s "
-            "of further upside, and kept the %s."
+    return ("%s settled at %s, above your %s. Your %s %s was sold at %s. You gave up %s of "
+            "further upside, and kept the %s premium."
             % (UNDERLYING, price(settled), price(STRIKE), fmt(SIZE), UNDERLYING,
                price(STRIKE), usd(given_up), usd(PREMIUM_USD)), True)
 
 
-def deliver():
-    """Buy the asset the owner has just agreed to buy. One key, never retried."""
+def deliver(settled):
+    """Buy the asset the owner has just agreed to buy. One key, never retried.
+
+    `acp trade` spends USDC, so SIZE of the asset is bought as SIZE x the
+    settlement price in USDC, rounded up to the cent: roughly SIZE units,
+    since the market has moved on since 08:00 UTC.
+
+    Returns "done", "pending", "refused" or "unknown". An unparseable answer
+    is "unknown", never "refused": the request may have landed, and only
+    `bevo.exec_status(key)` can say.
+    """
     key = "note:%s:deliver" % bevo.SERVICE_ID
+    spend = math.ceil(SIZE * settled * 100) / 100.0
     done = subprocess.run(
-        ["acp", "trade", "buy", UNDERLYING,
-         "--amount", fmt(SIZE), "--chain", str(CHAIN_ID),
-         "--idempotency-key", key],
+        ["acp", "trade", "--token-in", "usdc", "--chain-in", str(CHAIN_ID),
+         "--amount-in", "%.2f" % spend, "--token-out", UNDERLYING.lower(),
+         "--chain-out", str(CHAIN_ID), "--idempotency-key", key],
         capture_output=True, text=True, timeout=180, check=False,
     )
     answer = answer_of(done.stdout)
@@ -251,38 +236,38 @@ def deliver():
         state = (bevo.exec_status(key) or {}).get("state")
         say("delivery buy outcome UNKNOWN (exec_status: %s) - not retried" % state)
         return "unknown"
-    status = str(answer.get("status") or "").lower()
-    if answer.get("executed") or status == "executed":
+    if answer.get("executed"):
         return "done"
-    if answer.get("asked") or status in ("asked", "awaiting_approval", "pending_approval"):
+    if answer.get("asked") or answer.get("ok"):
         return "pending"
-    if answer.get("ok") or status in ("accepted", "executing", "pending", "replay"):
-        return "pending"
+    if answer.get("unrecognized"):
+        say("delivery buy: unrecognised answer %r - treated as unknown" % answer.get("status"))
+        return "unknown"
+    say("delivery buy refused: %s" % (answer.get("error") or answer.get("status")))
     return "refused"
 
 
 def settle():
-    """Read the settlement, say what happened, and deliver if asked."""
+    """Read the settlement, say what happened, deliver if asked, and finish."""
+    late = time.time() - EXPIRY
     try:
         settled = settlement_price()
-    except Exception as exc:  # noqa: BLE001 - the rail is allowed a bad minute
+    except bevo.BevoError as exc:
         say("could not read settlement: %s" % exc)
-        if time.time() - EXPIRY > SETTLE_ALARM_SECONDS and not bevo.state.get("settle_alarm"):
+        if late > SETTLE_ALARM_SECONDS and not bevo.state.get("settle_alarm"):
             bevo.state["settle_alarm"] = True
-            bevo.notify(("%s: your note has expired and I cannot read what it settled "
-                         "at, so I will not guess. Your money is not at risk from this "
-                         "- it is my read that is broken. Check Derive and I will keep "
-                         "trying." % NAME)[:500])
+            bevo.notify("%s: your note has expired and I cannot read what it settled at, so I "
+                        "will not guess. Your money is not at risk from this - it is my read "
+                        "that is broken. I will keep trying." % NAME)
+        bevo.fail("settlement unreadable: %s" % exc)
         return
 
-    late = time.time() - EXPIRY
     if settled is None:
         if late > SETTLE_ALARM_SECONDS and not bevo.state.get("settle_alarm"):
             bevo.state["settle_alarm"] = True
-            bevo.notify(("%s: your note expired %d hours ago and %s has not published a "
-                         "settlement price yet. Nothing is lost - I am still watching - "
-                         "but I wanted you to hear it from me."
-                         % (NAME, round(late / 3600), "Derive"))[:500])
+            bevo.notify("%s: your note expired %d hours ago and Derive has not published a "
+                        "settlement price yet. Nothing is lost and I am still watching."
+                        % (NAME, round(late / 3600)))
         else:
             say("settlement not published yet (%d min past expiry)" % round(late / 60))
         return
@@ -293,37 +278,30 @@ def settle():
     tail = ""
     if assigned and IS_PUT:
         if DELIVER_ASSET:
-            result = deliver()
+            result = deliver(settled)
             if result == "done":
-                tail = (" I have bought it for you, so you now own %s %s."
-                        % (fmt(SIZE), UNDERLYING))
+                tail = " I have bought the %s for you, so you now own about %s %s." % (
+                    UNDERLYING, fmt(SIZE), UNDERLYING)
             elif result == "pending":
-                tail = (" Buying the %s is waiting on your approval - until that "
-                        "goes through you are holding the loss in cash, not the %s."
-                        % (UNDERLYING, UNDERLYING))
+                tail = (" Buying the %s is waiting on your approval; until it goes through "
+                        "you are holding the loss in cash, not the %s." % (UNDERLYING, UNDERLYING))
             elif result == "refused":
-                tail = (" I could not buy the %s - that part needs you."
-                        % UNDERLYING)
+                tail = " I could not buy the %s, so you are holding the loss in cash." % UNDERLYING
             else:
-                tail = (" I am not certain whether the %s purchase went through; "
-                        "check before buying again." % UNDERLYING)
+                tail = (" I am not certain whether the %s purchase went through; check before "
+                        "buying again." % UNDERLYING)
         else:
-            tail = (" Derive settles in cash, so right now you are holding the loss, "
-                    "not the %s. Say the word and I will buy it." % UNDERLYING)
-    elif not assigned:
-        tail = " Want me to set up another one?"
+            tail = (" Derive settles in cash, so you are holding the loss in cash, not the %s."
+                    % UNDERLYING)
+    if IS_PUT:
+        tail += " What is left of your collateral is free cash in your Derive account."
+    else:
+        tail += " What is left of your %s collateral is free again in your Derive account." % UNDERLYING
 
-    bevo.notify((NAME + ": " + headline + tail)[:500])
-    bevo.state["done"] = True
-
-
-# --- each fire -----------------------------------------------------------------------------
+    bevo.done("%s: %s%s" % (NAME, headline, tail))
 
 
 def fire():
-    if bevo.state.get("done"):
-        return
-
     left = EXPIRY - time.time()
 
     if left > HEADS_UP_HOURS * 3600:
@@ -337,9 +315,8 @@ def fire():
             say("%s: %.1f hours to expiry, heads-up already sent" % (INSTRUMENT, left / 3600.0))
         return
 
-    if -left < SETTLE_GRACE_SECONDS and not bevo.state.get("settled_price"):
-        say("%s expired %d min ago; waiting for the settlement price"
-            % (INSTRUMENT, round(-left / 60)))
+    if -left < SETTLE_GRACE_SECONDS:
+        say("%s expired %d min ago; waiting for the settlement price" % (INSTRUMENT, round(-left / 60)))
         return
 
     settle()
@@ -350,6 +327,6 @@ if PROBLEM:
 
 for tick in bevo.ticks():
     if PROBLEM:
-        say("skipped: %s" % PROBLEM)
+        bevo.fail("settings: %s" % PROBLEM)
         continue
     fire()
