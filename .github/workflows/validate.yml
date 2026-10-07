@@ -1,13 +1,14 @@
 name: validate
-on:
-  push:
-    branches: [main]
-  pull_request:
-
+on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
+      # Checks out this repo, fetches the hub's validator and offline replay harness and runs both.
       - uses: Virtual-Protocol/butler-skills/.github/actions/validate@main
         with:
-          params: '{"LEGS":[{"SYMBOL":"ETH","CHAIN_ID":8453,"WEIGHT":50},{"SYMBOL":"SOL","CHAIN_ID":1151111081099710,"WEIGHT":50}],"SEED_USD":100}'
+          params: '{"INSTRUMENT":"ETH-20261030-2450-P","PRODUCT":"cash_secured_put","UNDERLYING":"ETH","STRIKE":2450,"SIZE":2.04,"PREMIUM_USD":55.17,"COLLATERAL_USD":4998}'
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
