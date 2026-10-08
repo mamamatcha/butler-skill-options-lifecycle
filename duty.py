@@ -9,16 +9,17 @@ Three moments matter and the owner should never have to ask about any of them:
     after that       the asset itself, if they asked to actually own it
 
 A duty has no network of its own, so the settlement price comes through the
-options rail (`bevo.read("/options/settlement")`) and the spot price through
-`/token-search`.
+options rail (`bevo.read("/options/settlement")`). The underlying is the token
+pinned in TOKEN_ID when the duty was filed: the heads-up prices exactly that
+pin with `/token-stats`, and the delivery buy trades the same pin.
 
 Derive settles options in **cash**. An in-the-money put reduces USDC; it does
 not hand over ETH. So "you now own 2.04 ETH" is only true when DELIVER_ASSET is
 on and the spot buy actually executed. Until then the duty says the owner is
 holding the loss in cash, because that is what has happened.
 
-Settings: INSTRUMENT, PRODUCT, UNDERLYING, STRIKE, SIZE, PREMIUM_USD,
-COLLATERAL_USD, DELIVER_ASSET, CHAIN_ID, HEADS_UP_HOURS.
+Settings: INSTRUMENT, PRODUCT, UNDERLYING, TOKEN_ID, STRIKE, SIZE, PREMIUM_USD,
+COLLATERAL_USD, DELIVER_ASSET, HEADS_UP_HOURS.
 """
 
 import bevo
@@ -40,12 +41,10 @@ SIZE = float(PARAMS.get("SIZE") or 0)
 PREMIUM_USD = float(PARAMS.get("PREMIUM_USD") or 0)
 COLLATERAL_USD = float(PARAMS.get("COLLATERAL_USD") or 0)
 DELIVER_ASSET = bool(PARAMS.get("DELIVER_ASSET") or False)
-CHAIN_ID = int(PARAMS.get("CHAIN_ID") or 8453)
+TOKEN_ID = str(PARAMS.get("TOKEN_ID") or "").strip()
 HEADS_UP_HOURS = float(PARAMS.get("HEADS_UP_HOURS") or 24)
 
 NAME = os.environ.get("BEVO_SERVICE_NAME") or "your note"
-
-SETTLEMENT_PATH = "/options/settlement"
 
 #: Settlement is published shortly after the 08:00 UTC expiry, not at the
 #: stroke of it. Below this the duty waits quietly rather than reporting a
@@ -131,25 +130,39 @@ elif not INSTRUMENT.startswith(UNDERLYING + "-"):
 elif SIZE <= 0 or STRIKE <= 0:
     PROBLEM = "SIZE and STRIKE must both be above zero"
 
+def parse_pin(pin):
+    """`native:<chainId>` or `<address>:<chainId>` → (token-out, chain id). None otherwise.
+
+    A tokenized stock (`stock:<TICKER>:0`) is no option's underlying, so it is
+    not accepted here.
+    """
+    m = re.match(r"^(native|0x[0-9a-fA-F]{40}):([0-9]+)$", pin)
+    if not m:
+        return None
+    token, chain = m.groups()
+    return ("eth" if token == "native" else token), int(chain)
+
+
+PIN = parse_pin(TOKEN_ID) if TOKEN_ID else None
+
+if not PROBLEM and not PIN:
+    PROBLEM = ("TOKEN_ID %r is not a pinned token like native:8453 or <address>:<chainId>"
+               % TOKEN_ID)
+
 EXPIRY = DETAIL["expiry"] if DETAIL else 0
 IS_PUT = PRODUCT == "cash_secured_put"
 
 
 def spot_now():
-    """What the underlying is worth right now, for the heads-up only.
+    """What the pinned underlying is worth right now, or None for no price this run.
 
-    `/token-search` lists every token by the ticker, best first and priced.
-    ETH and BTC are the coins, never a tokenized stock of the same ticker, so
-    the first non-stock row with a price is the one. Settlement never reads
-    this: Derive settles on its own index.
+    For the heads-up only; settlement never reads this, Derive settles on its
+    own index. An empty answer is a gap, not a zero.
     """
-    body = bevo.read("/token-search", {"q": UNDERLYING}) or {}
-    for row in body.get("tokens") or []:
-        if row.get("kind") == "stock" or row.get("verified") is False:
-            continue
-        if row.get("priceUsd"):
-            return float(row["priceUsd"])
-    raise bevo.BevoError("no priced %s row in /token-search" % UNDERLYING)
+    rows = (bevo.read("/token-stats", {"tokens": TOKEN_ID}) or {}).get("tokens") or []
+    if not rows or rows[0].get("priceUsd") is None:
+        return None
+    return float(rows[0]["priceUsd"])
 
 
 def settlement_price():
@@ -159,7 +172,7 @@ def settlement_price():
     all — a different thing, and the owner is told about it rather than being
     given a guess.
     """
-    body = bevo.read(SETTLEMENT_PATH, {"underlying": UNDERLYING, "expiry": EXPIRY}) or {}
+    body = bevo.read("/options/settlement", {"underlying": UNDERLYING, "expiry": EXPIRY}) or {}
     value = body.get("price")
     if value in (None, ""):
         return None
@@ -173,6 +186,9 @@ def heads_up():
         spot = spot_now()
     except bevo.BevoError as exc:
         say("could not read the price for the heads-up: %s" % exc)
+        return
+    if spot is None:
+        say("no price for %s this run; the heads-up waits for the next tick" % TOKEN_ID)
         return
 
     hours = max(0, (EXPIRY - time.time()) / 3600.0)
@@ -220,34 +236,12 @@ def outcome_sentences(settled):
                price(STRIKE), usd(given_up), usd(PREMIUM_USD)), True)
 
 
-def delivery_token():
-    """Exactly which token the delivery buy gets, pinned rather than a bare ticker.
-
-    ETH is the chain's own coin and cannot be mistaken. Anything else is the
-    verified, non-stock `/token-search` row on CHAIN_ID, bought by address: a
-    ticker alone can name a wrapper, a lookalike or a tokenized stock. None
-    when no such row exists — the duty then does not buy.
-    """
-    if UNDERLYING == "ETH":
-        return "eth"
-    try:
-        body = bevo.read("/token-search", {"q": UNDERLYING}) or {}
-    except bevo.BevoError as exc:
-        say("could not resolve %s for delivery: %s" % (UNDERLYING, exc))
-        return None
-    for row in body.get("tokens") or []:
-        if row.get("kind") == "stock" or row.get("verified") is not True:
-            continue
-        if str(row.get("chainId")) == str(CHAIN_ID) and row.get("address"):
-            return str(row["address"])
-    return None
-
-
 def deliver(settled):
     """Buy the asset the owner has just agreed to buy. One key, never retried.
 
-    `acp trade` spends USDC, so SIZE of the asset is bought as SIZE x the
-    settlement price in USDC, rounded up to the cent: roughly SIZE units,
+    It buys the pinned token (TOKEN_ID) on the pin's own chain, never a bare
+    ticker. `acp trade` spends USDC, so SIZE of the asset is bought as SIZE x
+    the settlement price in USDC, rounded up to the cent: roughly SIZE units,
     since the market has moved on since 08:00 UTC.
 
     Returns "done", "pending", "refused" or "unknown". An unparseable answer
@@ -255,15 +249,12 @@ def deliver(settled):
     `bevo.exec_status(key)` can say.
     """
     key = "note:%s:deliver" % bevo.SERVICE_ID
-    token_out = delivery_token()
-    if token_out is None:
-        say("delivery buy refused: no verified %s token on chain %s to buy" % (UNDERLYING, CHAIN_ID))
-        return "refused"
+    token_out, chain = PIN
     spend = math.ceil(SIZE * settled * 100) / 100.0
     done = subprocess.run(
-        ["acp", "trade", "--token-in", "usdc", "--chain-in", str(CHAIN_ID),
+        ["acp", "trade", "--token-in", "usdc", "--chain-in", str(chain),
          "--amount-in", "%.2f" % spend, "--token-out", token_out,
-         "--chain-out", str(CHAIN_ID), "--idempotency-key", key],
+         "--chain-out", str(chain), "--idempotency-key", key],
         capture_output=True, text=True, timeout=180, check=False,
     )
     answer = answer_of(done.stdout)

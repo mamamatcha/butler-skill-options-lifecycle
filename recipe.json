@@ -28,6 +28,7 @@
       "INSTRUMENT",
       "PRODUCT",
       "UNDERLYING",
+      "TOKEN_ID",
       "STRIKE",
       "SIZE",
       "PREMIUM_USD"
@@ -53,6 +54,12 @@
         "minLength": 2,
         "maxLength": 12
       },
+      "TOKEN_ID": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 80,
+        "description": "The underlying pinned to one token when the duty is filed, from the /token-search row for UNDERLYING: native:<chainId> for the chain's coin (ETH on Base is native:8453), <address>:<chainId> for a token such as cbBTC. The heads-up prices exactly this pin with /token-stats and the delivery buy trades it on its chain."
+      },
       "STRIKE": {
         "type": "number",
         "description": "The price the owner agreed to buy at (put) or sell at (call).",
@@ -77,12 +84,7 @@
       "DELIVER_ASSET": {
         "type": "boolean",
         "default": false,
-        "description": "Only for a put that settles in the money. Derive settles in cash, so the owner holds the loss in cash and no asset. With this on, the duty spends SIZE x the settlement price of wallet USDC on CHAIN_ID buying the underlying. Off by default: it spends money, so the owner has to have asked."
-      },
-      "CHAIN_ID": {
-        "type": "integer",
-        "default": 8453,
-        "description": "Chain the DELIVER_ASSET buy runs on and spends wallet USDC from: 1 Ethereum, 8453 Base, 42161 Arbitrum."
+        "description": "Only for a put that settles in the money. Derive settles in cash, so the owner holds the loss in cash and no asset. With this on, the duty spends SIZE x the settlement price of wallet USDC buying the TOKEN_ID token on its chain. Off by default: it spends money, so the owner has to have asked."
       },
       "HEADS_UP_HOURS": {
         "type": "number",

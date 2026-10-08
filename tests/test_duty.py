@@ -17,10 +17,7 @@ ASKS = re.compile(r"\?|\bsay the word\b|\bwant me to\b|\bshall i\b|\bshould i\b|
 
 SETTLED_AT = EXPIRY + hours(1)
 def priced(value):
-    return {"/token-search": {"tokens": [
-        {"symbol": "ETH", "kind": "stock", "priceUsd": "12.5"},
-        {"symbol": "ETH", "kind": "native", "verified": True, "priceUsd": value},
-    ]}}
+    return {"/token-stats": {"tokens": [{"priceUsd": value, "priceChangeH24": -1.2}]}}
 
 
 PRICE = priced("2705.5")
@@ -40,7 +37,7 @@ class HeadsUp(unittest.TestCase):
         fake = run(PUT, [EXPIRY - hours(20), EXPIRY - hours(19)], PRICE)
         self.assertEqual(len(fake.notes), 1)
         self.assertIn("looks set to pay out in full", fake.notes[0])
-        self.assertEqual(fake.read_calls[0], ("/token-search", {"q": "ETH"}))
+        self.assertEqual(fake.read_calls[0], ("/token-stats", {"tokens": "native:8453"}))
         self.assertTrue(fake.state["heads_up_sent"])
 
     def test_put_under_the_strike_warns_of_buying(self):
@@ -51,14 +48,14 @@ class HeadsUp(unittest.TestCase):
         fake = run(CALL, [EXPIRY - hours(5)], priced("3100"))
         self.assertIn("your ETH may be sold at $3,000", fake.notes[0])
 
-    def test_a_tokenized_stock_of_the_same_ticker_is_never_the_price(self):
-        fake = run(PUT, [EXPIRY - hours(5)], {"/token-search": {"tokens": [
-            {"symbol": "ETH", "kind": "stock", "priceUsd": "12.5"}]}})
+    def test_an_empty_price_read_is_a_gap_not_a_zero_and_never_a_failure(self):
+        fake = run(PUT, [EXPIRY - hours(5), EXPIRY - hours(4)], {"/token-stats": {"tokens": []}})
         self.assertEqual(fake.notes, [])
+        self.assertEqual(fake.fails, [])
         self.assertNotIn("heads_up_sent", fake.state)
 
     def test_an_unreadable_price_skips_quietly_and_retries(self):
-        fake = run(PUT, [EXPIRY - hours(5)], {"/token-search": BevoError("down")})
+        fake = run(PUT, [EXPIRY - hours(5)], {"/token-stats": BevoError("down")})
         self.assertEqual(fake.notes, [])
         self.assertNotIn("heads_up_sent", fake.state)
 
@@ -119,9 +116,9 @@ class Settlement(unittest.TestCase):
 
 
 class Delivery(unittest.TestCase):
-    DELIVER = dict(PUT, DELIVER_ASSET=True, CHAIN_ID=8453)
+    DELIVER = dict(PUT, DELIVER_ASSET=True)
 
-    def test_buys_size_times_settlement_with_one_literal_key(self):
+    def test_buys_size_times_settlement_of_the_pinned_token_with_one_literal_key(self):
         fake = run(self.DELIVER, [SETTLED_AT], settled("2200"), acp=[answer(executed=True)])
         self.assertEqual(fake.acp_calls, [[
             "acp", "trade", "--token-in", "usdc", "--chain-in", "8453",
@@ -146,26 +143,15 @@ class Delivery(unittest.TestCase):
         fake = run(self.DELIVER, [SETTLED_AT], settled("2200"), acp=[answer(error="wallet_short")])
         self.assertIn("could not buy the ETH", fake.dones[0])
 
-    def test_btc_is_bought_by_the_pinned_verified_address_on_the_chain(self):
-        btc = dict(self.DELIVER, INSTRUMENT="BTC-20261030-75000-P", UNDERLYING="BTC", STRIKE=75000, SIZE=0.06)
-        reads = dict(settled("70000"))
-        reads["/token-search"] = {"tokens": [
-            {"symbol": "BTC", "kind": "stock", "chainId": None, "address": None},
-            {"symbol": "BTC", "kind": "erc20", "verified": False, "chainId": 8453, "address": "lookalike"},
-            {"symbol": "cbBTC", "kind": "erc20", "verified": True, "chainId": 1, "address": "wrong-chain"},
-            {"symbol": "cbBTC", "kind": "erc20", "verified": True, "chainId": 8453, "address": "pinned-base-btc"},
-        ]}
-        fake = run(btc, [SETTLED_AT], reads, acp=[answer(executed=True)])
+    def test_a_token_pin_is_bought_by_its_address_on_its_own_chain(self):
+        cbbtc = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+        btc = dict(self.DELIVER, INSTRUMENT="BTC-20261030-75000-P", UNDERLYING="BTC",
+                   TOKEN_ID=cbbtc + ":8453", STRIKE=75000, SIZE=0.06)
+        fake = run(btc, [SETTLED_AT], settled("70000"), acp=[answer(executed=True)])
         argv = fake.acp_calls[0]
-        self.assertEqual(argv[argv.index("--token-out") + 1], "pinned-base-btc")
-
-    def test_no_verified_token_on_the_chain_means_no_buy(self):
-        btc = dict(self.DELIVER, INSTRUMENT="BTC-20261030-75000-P", UNDERLYING="BTC", STRIKE=75000, SIZE=0.06)
-        reads = dict(settled("70000"))
-        reads["/token-search"] = {"tokens": [{"symbol": "BTC", "kind": "stock"}]}
-        fake = run(btc, [SETTLED_AT], reads)
-        self.assertEqual(fake.acp_calls, [])
-        self.assertIn("could not buy the BTC", fake.dones[0])
+        self.assertEqual(argv[argv.index("--token-out") + 1], cbbtc)
+        self.assertEqual(argv[argv.index("--chain-out") + 1], "8453")
+        self.assertEqual(argv[argv.index("--amount-in") + 1], "4200.00")  # 0.06 x 70,000
 
     def test_never_buys_after_a_put_that_kept_its_collateral(self):
         fake = run(self.DELIVER, [SETTLED_AT], settled("2600"), acp=[answer(executed=True)])
@@ -173,6 +159,12 @@ class Delivery(unittest.TestCase):
 
 
 class Settings(unittest.TestCase):
+    def test_the_underlying_must_be_pinned(self):
+        for pin in ["", "ETH", "stock:ETH:0", "native:base"]:
+            fake = run(dict(PUT, TOKEN_ID=pin), [SETTLED_AT], settled("2200"))
+            self.assertIn("is not a pinned token", fake.notes[0], pin)
+            self.assertEqual(fake.read_calls, [])
+
     def test_a_put_filed_as_a_call_does_nothing(self):
         fake = run(dict(PUT, PRODUCT="covered_call"), [SETTLED_AT], settled("2200"))
         self.assertIn("does nothing until its settings are fixed", fake.notes[0])
