@@ -16,7 +16,14 @@ SOURCE = (Path(__file__).resolve().parent.parent / "duty.py").read_text()
 ASKS = re.compile(r"\?|\bsay the word\b|\bwant me to\b|\bshall i\b|\bshould i\b|\breply\b", re.I)
 
 SETTLED_AT = EXPIRY + hours(1)
-PRICE = {"/token-price": {"priceUsd": "2705.5"}}
+def priced(value):
+    return {"/token-search": {"tokens": [
+        {"symbol": "ETH", "kind": "stock", "priceUsd": "12.5"},
+        {"symbol": "ETH", "kind": "native", "verified": True, "priceUsd": value},
+    ]}}
+
+
+PRICE = priced("2705.5")
 
 
 def settled(value):
@@ -33,19 +40,25 @@ class HeadsUp(unittest.TestCase):
         fake = run(PUT, [EXPIRY - hours(20), EXPIRY - hours(19)], PRICE)
         self.assertEqual(len(fake.notes), 1)
         self.assertIn("looks set to pay out in full", fake.notes[0])
-        self.assertEqual(fake.read_calls[0], ("/token-price", {"q": "ETH"}))
+        self.assertEqual(fake.read_calls[0], ("/token-search", {"q": "ETH"}))
         self.assertTrue(fake.state["heads_up_sent"])
 
     def test_put_under_the_strike_warns_of_buying(self):
-        fake = run(PUT, [EXPIRY - hours(5)], {"/token-price": {"priceUsd": "2300"}})
+        fake = run(PUT, [EXPIRY - hours(5)], priced("2300"))
         self.assertIn("you may end up buying ETH at $2,450", fake.notes[0])
 
     def test_call_over_the_strike_warns_of_selling(self):
-        fake = run(CALL, [EXPIRY - hours(5)], {"/token-price": {"priceUsd": "3100"}})
+        fake = run(CALL, [EXPIRY - hours(5)], priced("3100"))
         self.assertIn("your ETH may be sold at $3,000", fake.notes[0])
 
+    def test_a_tokenized_stock_of_the_same_ticker_is_never_the_price(self):
+        fake = run(PUT, [EXPIRY - hours(5)], {"/token-search": {"tokens": [
+            {"symbol": "ETH", "kind": "stock", "priceUsd": "12.5"}]}})
+        self.assertEqual(fake.notes, [])
+        self.assertNotIn("heads_up_sent", fake.state)
+
     def test_an_unreadable_price_skips_quietly_and_retries(self):
-        fake = run(PUT, [EXPIRY - hours(5)], {"/token-price": BevoError("down")})
+        fake = run(PUT, [EXPIRY - hours(5)], {"/token-search": BevoError("down")})
         self.assertEqual(fake.notes, [])
         self.assertNotIn("heads_up_sent", fake.state)
 
@@ -133,6 +146,27 @@ class Delivery(unittest.TestCase):
         fake = run(self.DELIVER, [SETTLED_AT], settled("2200"), acp=[answer(error="wallet_short")])
         self.assertIn("could not buy the ETH", fake.dones[0])
 
+    def test_btc_is_bought_by_the_pinned_verified_address_on_the_chain(self):
+        btc = dict(self.DELIVER, INSTRUMENT="BTC-20261030-75000-P", UNDERLYING="BTC", STRIKE=75000, SIZE=0.06)
+        reads = dict(settled("70000"))
+        reads["/token-search"] = {"tokens": [
+            {"symbol": "BTC", "kind": "stock", "chainId": None, "address": None},
+            {"symbol": "BTC", "kind": "erc20", "verified": False, "chainId": 8453, "address": "lookalike"},
+            {"symbol": "cbBTC", "kind": "erc20", "verified": True, "chainId": 1, "address": "wrong-chain"},
+            {"symbol": "cbBTC", "kind": "erc20", "verified": True, "chainId": 8453, "address": "pinned-base-btc"},
+        ]}
+        fake = run(btc, [SETTLED_AT], reads, acp=[answer(executed=True)])
+        argv = fake.acp_calls[0]
+        self.assertEqual(argv[argv.index("--token-out") + 1], "pinned-base-btc")
+
+    def test_no_verified_token_on_the_chain_means_no_buy(self):
+        btc = dict(self.DELIVER, INSTRUMENT="BTC-20261030-75000-P", UNDERLYING="BTC", STRIKE=75000, SIZE=0.06)
+        reads = dict(settled("70000"))
+        reads["/token-search"] = {"tokens": [{"symbol": "BTC", "kind": "stock"}]}
+        fake = run(btc, [SETTLED_AT], reads)
+        self.assertEqual(fake.acp_calls, [])
+        self.assertIn("could not buy the BTC", fake.dones[0])
+
     def test_never_buys_after_a_put_that_kept_its_collateral(self):
         fake = run(self.DELIVER, [SETTLED_AT], settled("2600"), acp=[answer(executed=True)])
         self.assertEqual(fake.acp_calls, [])
@@ -167,7 +201,7 @@ class Boundary(unittest.TestCase):
 
     def test_no_note_asks_the_owner_anything(self):
         worlds = [
-            run(PUT, [EXPIRY - hours(5)], {"/token-price": {"priceUsd": "2300"}}),
+            run(PUT, [EXPIRY - hours(5)], priced("2300")),
             run(PUT, [SETTLED_AT], settled("2200")),
             run(PUT, [SETTLED_AT], settled("2600")),
             run(CALL, [SETTLED_AT], settled("3200")),

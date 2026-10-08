@@ -10,7 +10,7 @@ Three moments matter and the owner should never have to ask about any of them:
 
 A duty has no network of its own, so the settlement price comes through the
 options rail (`bevo.read("/options/settlement")`) and the spot price through
-`/token-price`.
+`/token-search`.
 
 Derive settles options in **cash**. An in-the-money put reduces USDC; it does
 not hand over ETH. So "you now own 2.04 ETH" is only true when DELIVER_ASSET is
@@ -136,12 +136,20 @@ IS_PUT = PRODUCT == "cash_secured_put"
 
 
 def spot_now():
-    """What the underlying is worth right now."""
-    body = bevo.read("/token-price", {"q": UNDERLYING}) or {}
-    value = body.get("priceUsd")
-    if not value:
-        raise bevo.BevoError("no priceUsd for %s in /token-price" % UNDERLYING)
-    return float(value)
+    """What the underlying is worth right now, for the heads-up only.
+
+    `/token-search` lists every token by the ticker, best first and priced.
+    ETH and BTC are the coins, never a tokenized stock of the same ticker, so
+    the first non-stock row with a price is the one. Settlement never reads
+    this: Derive settles on its own index.
+    """
+    body = bevo.read("/token-search", {"q": UNDERLYING}) or {}
+    for row in body.get("tokens") or []:
+        if row.get("kind") == "stock" or row.get("verified") is False:
+            continue
+        if row.get("priceUsd"):
+            return float(row["priceUsd"])
+    raise bevo.BevoError("no priced %s row in /token-search" % UNDERLYING)
 
 
 def settlement_price():
@@ -212,6 +220,29 @@ def outcome_sentences(settled):
                price(STRIKE), usd(given_up), usd(PREMIUM_USD)), True)
 
 
+def delivery_token():
+    """Exactly which token the delivery buy gets, pinned rather than a bare ticker.
+
+    ETH is the chain's own coin and cannot be mistaken. Anything else is the
+    verified, non-stock `/token-search` row on CHAIN_ID, bought by address: a
+    ticker alone can name a wrapper, a lookalike or a tokenized stock. None
+    when no such row exists — the duty then does not buy.
+    """
+    if UNDERLYING == "ETH":
+        return "eth"
+    try:
+        body = bevo.read("/token-search", {"q": UNDERLYING}) or {}
+    except bevo.BevoError as exc:
+        say("could not resolve %s for delivery: %s" % (UNDERLYING, exc))
+        return None
+    for row in body.get("tokens") or []:
+        if row.get("kind") == "stock" or row.get("verified") is not True:
+            continue
+        if str(row.get("chainId")) == str(CHAIN_ID) and row.get("address"):
+            return str(row["address"])
+    return None
+
+
 def deliver(settled):
     """Buy the asset the owner has just agreed to buy. One key, never retried.
 
@@ -224,10 +255,14 @@ def deliver(settled):
     `bevo.exec_status(key)` can say.
     """
     key = "note:%s:deliver" % bevo.SERVICE_ID
+    token_out = delivery_token()
+    if token_out is None:
+        say("delivery buy refused: no verified %s token on chain %s to buy" % (UNDERLYING, CHAIN_ID))
+        return "refused"
     spend = math.ceil(SIZE * settled * 100) / 100.0
     done = subprocess.run(
         ["acp", "trade", "--token-in", "usdc", "--chain-in", str(CHAIN_ID),
-         "--amount-in", "%.2f" % spend, "--token-out", UNDERLYING.lower(),
+         "--amount-in", "%.2f" % spend, "--token-out", token_out,
          "--chain-out", str(CHAIN_ID), "--idempotency-key", key],
         capture_output=True, text=True, timeout=180, check=False,
     )
