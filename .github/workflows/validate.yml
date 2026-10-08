@@ -9,6 +9,6 @@ jobs:
       # Checks out this repo, fetches the hub's validator and offline replay harness and runs both.
       - uses: Virtual-Protocol/butler-skills/.github/actions/validate@main
         with:
-          params: '{"INSTRUMENT":"ETH-20261030-2450-P","PRODUCT":"cash_secured_put","UNDERLYING":"ETH","STRIKE":2450,"SIZE":2.04,"PREMIUM_USD":55.17,"COLLATERAL_USD":4998}'
+          params: '{"INSTRUMENT":"ETH-20261030-2450-P","PRODUCT":"cash_secured_put","UNDERLYING":"ETH","TOKEN_ID":"native:8453","STRIKE":2450,"SIZE":2.04,"PREMIUM_USD":55.17,"COLLATERAL_USD":4998}'
       - name: Unit tests
         run: python3 -m unittest discover -s tests -v

@@ -2,15 +2,15 @@
 
 ## 2
 
-- The heads-up prices the underlying from `/token-search` (the first priced,
-  non-stock row): `/token-price` is retired and the container's lint refuses it
-  in new duty code. v1 also called it with `symbol`, got a 400, and never sent
-  a heads-up.
+- The underlying is pinned at filing in the new required `TOKEN_ID`
+  (`native:<chainId>` or `<address>:<chainId>`), replacing `CHAIN_ID`. The
+  heads-up prices exactly that pin with `/token-stats` (`/token-price` is
+  retired, and v1 called it with `symbol`, got a 400 and never sent a heads-up);
+  an empty price read skips the tick.
 - The delivery buy uses the `acp trade` grammar bevo-server parses
   (`--token-in usdc --amount-in <usd> --token-out <asset>`), spending SIZE x the
-  settlement price. v1's `acp trade buy … --amount` was unparseable. The token
-  it buys is pinned: ETH is the chain's coin; anything else is the verified,
-  non-stock `/token-search` row on `CHAIN_ID`, by address, or no buy at all.
+  settlement price, of the `TOKEN_ID` token on its own chain. v1's
+  `acp trade buy … --amount` was unparseable.
 - `acp` answers are read the way copytrade reads them: `executed`, `asked`/`ok`,
   `unrecognized`; an unreadable answer is unknown, checked with `exec_status`,
   never retried.

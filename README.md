@@ -4,7 +4,7 @@ Watches one yield note on Derive, a single option the owner sold fully collatera
 
 ## How it is filed
 
-Filed with `recipe: "options-lifecycle@2"` only after the open reports `executed` (or `bevo-read request <key>` confirms it). The settings are copied from that answer, never from the quote: `INSTRUMENT` exactly as filled, `SIZE` as filled, `PREMIUM_USD` as the net premium after Derive's fee, `COLLATERAL_USD` as locked. A note whose open is unknown or refused gets no duty.
+Filed with `recipe: "options-lifecycle@2"` only after the open is confirmed (`bevo-read request <key> --route options` reads `approvalStatus: confirmed`). The settings are copied from its `approvalOutcome`, never from the quote: `INSTRUMENT` and `STRIKE` as filled, `SIZE` = `filledSize`, `PREMIUM_USD` = `netPremiumUsd`, `COLLATERAL_USD` = `collateral`. `TOKEN_ID` pins the underlying from its `/token-search` row (`native:8453` for ETH on Base). A note whose open is unknown, refused or pending gets no duty.
 
 ## What it does
 
@@ -21,7 +21,7 @@ Expiry and option type are read back out of `INSTRUMENT` (`ETH-20261030-2450-P` 
 - **Say "you now own" without a filled buy.** Derive settles in cash: an assigned put leaves the owner holding the loss in USDC, not the asset. Only an executed delivery buy changes that, and a pending, refused or unknown one is reported as such.
 - **Guess a settlement.** No price published yet means it waits quietly; past 6 hours it says so once. An unreadable settlement read is reported as the read being broken, never as an outcome.
 - **Retry the delivery buy.** It has one key; an unclear answer is checked with `exec_status`, never re-sent.
-- **Buy a lookalike.** ETH is the chain's own coin; any other asset is bought only as the verified, non-stock token `/token-search` lists on `CHAIN_ID`, by address, and not at all if there is none.
+- **Price or buy by ticker.** The underlying is the token pinned in `TOKEN_ID` at filing; the heads-up prices that pin with `/token-stats` and the delivery buy trades it on its own chain. An empty price read skips the heads-up for that tick.
 - **Move collateral.** After settlement the collateral sits free in the Derive account; withdrawing it is a separate `acp options withdraw`.
 - **Open, roll or close a note.** It only watches the one it was filed for.
 
@@ -32,12 +32,12 @@ Expiry and option type are read back out of `INSTRUMENT` (`ETH-20261030-2450-P` 
 | `INSTRUMENT` | Derive name | the option sold, exactly as filled |
 | `PRODUCT` | `cash_secured_put` \| `covered_call` | must match the `P`/`C` in `INSTRUMENT` |
 | `UNDERLYING` | ticker | `ETH`, `BTC`; the prefix of `INSTRUMENT` |
+| `TOKEN_ID` | pin | `native:<chainId>` or `<address>:<chainId>`: the one token priced and, on delivery, bought |
 | `STRIKE` | US dollars | the price agreed to buy (put) or sell (call) at |
 | `SIZE` | contracts = units of the underlying | as filled |
 | `PREMIUM_USD` | US dollars | net of Derive's fee |
 | `COLLATERAL_USD` | US dollars | USDC locked behind a put; `0` for a call |
-| `DELIVER_ASSET` | on/off, default **off** | buy the underlying after an assigned put, spending SIZE x the settlement price of wallet USDC on `CHAIN_ID` |
-| `CHAIN_ID` | chain id, default `8453` | where that buy runs |
+| `DELIVER_ASSET` | on/off, default **off** | buy the `TOKEN_ID` token after an assigned put, spending SIZE x the settlement price of wallet USDC on its chain |
 | `HEADS_UP_HOURS` | hours, default `24` | how long before expiry the heads-up goes out |
 
 ## Trigger
