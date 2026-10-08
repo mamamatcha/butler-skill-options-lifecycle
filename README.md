@@ -21,6 +21,7 @@ Expiry and option type are read back out of `INSTRUMENT` (`ETH-20261030-2450-P` 
 - **Say "you now own" without a filled buy.** Derive settles in cash: an assigned put leaves the owner holding the loss in USDC, not the asset. Only an executed delivery buy changes that, and a pending, refused or unknown one is reported as such.
 - **Guess a settlement.** No price published yet means it waits quietly; past 6 hours it says so once. An unreadable settlement read is reported as the read being broken, never as an outcome.
 - **Retry the delivery buy.** It has one key; an unclear answer is checked with `exec_status`, never re-sent.
+- **Buy a lookalike.** ETH is the chain's own coin; any other asset is bought only as the verified, non-stock token `/token-search` lists on `CHAIN_ID`, by address, and not at all if there is none.
 - **Move collateral.** After settlement the collateral sits free in the Derive account; withdrawing it is a separate `acp options withdraw`.
 - **Open, roll or close a note.** It only watches the one it was filed for.
 
