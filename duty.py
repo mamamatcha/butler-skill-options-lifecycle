@@ -1,7 +1,8 @@
 """Watch one yield note from open to outcome, and say what happened.
 
-A note is one option the owner sold on Derive, fully collateralised. The
-yield-notes skill opens it and files this duty with the fill's own numbers.
+A note is one option the owner sold on Derive, fully collateralised; a bought
+option is one they paid a premium for. The options-trading skill opens either
+and files this duty with the fill's own numbers.
 Three moments matter and the owner should never have to ask about any of them:
 
     the day before   where the asset is, and which way the note is leaning
@@ -117,14 +118,16 @@ def parse_instrument(name):
 
 DETAIL = parse_instrument(INSTRUMENT) if INSTRUMENT else None
 
+#: Sold notes (income) and bought options, by the option type each must be.
+PRODUCT_KIND = {"cash_secured_put": "P", "covered_call": "C", "long_call": "C", "long_put": "P"}
+
 if not DETAIL:
     PROBLEM = "INSTRUMENT %r is not a Derive option name like ETH-20261030-2450-P" % INSTRUMENT
-elif PRODUCT not in ("cash_secured_put", "covered_call"):
-    PROBLEM = "PRODUCT must be cash_secured_put or covered_call, not %r" % PRODUCT
-elif DETAIL["kind"] == "P" and PRODUCT != "cash_secured_put":
-    PROBLEM = "%s is a put but PRODUCT says %s" % (INSTRUMENT, PRODUCT)
-elif DETAIL["kind"] == "C" and PRODUCT != "covered_call":
-    PROBLEM = "%s is a call but PRODUCT says %s" % (INSTRUMENT, PRODUCT)
+elif PRODUCT not in PRODUCT_KIND:
+    PROBLEM = "PRODUCT must be one of %s, not %r" % (", ".join(sorted(PRODUCT_KIND)), PRODUCT)
+elif DETAIL["kind"] != PRODUCT_KIND[PRODUCT]:
+    PROBLEM = "%s is a %s but PRODUCT says %s" % (
+        INSTRUMENT, "put" if DETAIL["kind"] == "P" else "call", PRODUCT)
 elif not INSTRUMENT.startswith(UNDERLYING + "-"):
     PROBLEM = "%s is not an option on UNDERLYING %s" % (INSTRUMENT, UNDERLYING)
 elif SIZE <= 0 or STRIKE <= 0:
@@ -151,6 +154,35 @@ if not PROBLEM and not PIN:
 
 EXPIRY = DETAIL["expiry"] if DETAIL else 0
 IS_PUT = PRODUCT == "cash_secured_put"
+IS_LONG = PRODUCT in ("long_call", "long_put")
+IS_CALL = PRODUCT_KIND.get(PRODUCT) == "C"
+
+
+def intrinsic(px):
+    """What the option is worth at `px`: what a bought one is paid at expiry."""
+    return max(0.0, (px - STRIKE) if IS_CALL else (STRIKE - px)) * SIZE
+
+
+def still_held():
+    """Whether the account still holds this option, bought or sold. None when unreadable.
+
+    A bought option can be sold back, and a sold note bought back, before expiry;
+    the skill deletes this duty when it is, and this is the duty's own check in
+    case that was missed.
+    """
+    try:
+        body = bevo.read("/options/account") or {}
+    except bevo.BevoError as exc:
+        say("could not read the account: %s" % exc)
+        return None
+    account = body.get("account")
+    if not isinstance(account, dict):
+        return None
+    for row in account.get("positions") or []:
+        size = float(row.get("size") or 0)
+        if row.get("instrument") == INSTRUMENT and (size > 0 if IS_LONG else size < 0):
+            return True
+    return False
 
 
 def spot_now():
@@ -192,6 +224,19 @@ def heads_up():
         return
 
     hours = max(0, (EXPIRY - time.time()) / 3600.0)
+    if IS_LONG:
+        kind = "call" if IS_CALL else "put"
+        worth = intrinsic(spot)
+        if worth > 0:
+            leaning = ("is in the money: if it ends here it pays about %s, against the %s it cost"
+                       % (usd(worth), usd(PREMIUM_USD)))
+        else:
+            leaning = ("is out of the money: it pays nothing unless %s ends %s %s"
+                       % (UNDERLYING, "above" if IS_CALL else "below", price(STRIKE)))
+        bevo.notify("%s: %s is at %s. Your %s %s. It settles in about %d hours."
+                    % (NAME, UNDERLYING, price(spot), kind, leaning, round(hours)))
+        bevo.state["heads_up_sent"] = True
+        return
     if IS_PUT:
         leaning = ("looks set to pay out in full" if spot >= STRIKE else
                    "is under your price, so you may end up buying %s at %s"
@@ -213,6 +258,19 @@ def outcome_sentences(settled):
     settles in cash, so until the delivery buy executes the owner owns no
     asset — and settle() is the only thing that knows whether it did.
     """
+    if IS_LONG:
+        kind = "call" if IS_CALL else "put"
+        side = "above" if settled > STRIKE else "under"
+        paid = intrinsic(settled)
+        if paid > 0:
+            net = paid - PREMIUM_USD
+            return ("%s settled at %s, %s your %s: your %s paid %s into your Derive account. After "
+                    "the %s it cost, you are %s %s."
+                    % (UNDERLYING, price(settled), side, price(STRIKE), kind, usd(paid),
+                       usd(PREMIUM_USD), "down" if net < 0 else "up", usd(abs(net))), False)
+        return ("%s settled at %s, %s your %s: the %s expired worthless, so the %s you paid is lost."
+                % (UNDERLYING, price(settled), "at or under" if IS_CALL else "at or above",
+                   price(STRIKE), kind, usd(PREMIUM_USD)), False)
     if IS_PUT:
         if settled >= STRIKE:
             kept = COLLATERAL_USD or (STRIKE * SIZE)
@@ -319,7 +377,10 @@ def settle():
         else:
             tail = (" Derive settles in cash, so you are holding the loss in cash, not the %s."
                     % UNDERLYING)
-    if IS_PUT:
+    if IS_LONG:
+        if intrinsic(settled) > 0:
+            tail += " The payout is free cash in your Derive account."
+    elif IS_PUT:
         tail += " What is left of your collateral is free cash in your Derive account."
     else:
         tail += " What is left of your %s collateral is free again in your Derive account." % UNDERLYING
@@ -336,6 +397,9 @@ def fire():
 
     if left > 0:
         if not bevo.state.get("heads_up_sent"):
+            if still_held() is False:
+                bevo.done("%s: your %s was %s before expiry, so there is nothing left to watch."
+                          % (NAME, INSTRUMENT, "sold back" if IS_LONG else "bought back"))
             heads_up()
         else:
             say("%s: %.1f hours to expiry, heads-up already sent" % (INSTRUMENT, left / 3600.0))

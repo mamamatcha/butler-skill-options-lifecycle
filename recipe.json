@@ -1,22 +1,28 @@
 {
   "id": "options-lifecycle",
-  "version": 2,
-  "description": "Watch one Derive yield note to expiry: a heads-up the day before, the outcome once it settles, and, only if the owner asked, buying the asset an assigned put agreed to.",
+  "version": 3,
+  "description": "Watch one Derive option to expiry, sold or bought: a heads-up the day before, the outcome once it settles, and, only if asked, buying the asset an assigned put agreed to.",
   "keywords": [
-    "yield note",
-    "option",
-    "expiry",
-    "settlement",
     "assigned",
-    "covered call",
+    "bought option",
+    "call option",
     "cash secured put",
-    "roll"
+    "covered call",
+    "expiry",
+    "long call",
+    "long put",
+    "option",
+    "put option",
+    "roll",
+    "settlement",
+    "yield note"
   ],
   "triggers": [
     "timer"
   ],
   "supersedes": [
-    "options-lifecycle@1"
+    "options-lifecycle@1",
+    "options-lifecycle@2"
   ],
   "keys": [
     "note:<duty>:deliver"
@@ -44,9 +50,11 @@
         "type": "string",
         "enum": [
           "cash_secured_put",
-          "covered_call"
+          "covered_call",
+          "long_call",
+          "long_put"
         ],
-        "description": "Which note this is. A put ends in the owner buying the asset; a call ends in them selling it."
+        "description": "cash_secured_put or covered_call for a note the owner SOLD (income); long_call or long_put for an option they BOUGHT. Must match the P/C in INSTRUMENT."
       },
       "UNDERLYING": {
         "type": "string",
@@ -73,18 +81,18 @@
       "PREMIUM_USD": {
         "type": "number",
         "minimum": 0,
-        "description": "What the owner kept at open, net of Derive's fee: the filled premium minus the fee, exactly as the open reported it. Quoted back at expiry, so never the gross."
+        "description": "For a sold note, what the owner kept at open, net of Derive's fee. For a bought option, the total it cost including the fee (the open's totalCostUsd). Quoted back at expiry."
       },
       "COLLATERAL_USD": {
         "type": "number",
         "minimum": 0,
         "default": 0,
-        "description": "USDC locked behind a put, as the open reported it. 0 for a covered call, which is collateralised by the asset itself."
+        "description": "USDC locked behind a sold put, as the open reported it. 0 for a covered call and for any bought option."
       },
       "DELIVER_ASSET": {
         "type": "boolean",
         "default": false,
-        "description": "Only for a put that settles in the money. Derive settles in cash, so the owner holds the loss in cash and no asset. With this on, the duty spends SIZE x the settlement price of wallet USDC buying the TOKEN_ID token on its chain. Off by default: it spends money, so the owner has to have asked."
+        "description": "Only for a sold put that settles in the money (cash_secured_put). Derive settles in cash, so the owner holds the loss in cash and no asset. With this on, the duty spends SIZE x the settlement price of wallet USDC buying the TOKEN_ID token on its chain. Off by default: it spends money, so the owner has to have asked."
       },
       "HEADS_UP_HOURS": {
         "type": "number",

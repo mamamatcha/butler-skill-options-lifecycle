@@ -40,6 +40,27 @@ CALL = {
 }
 
 
+LONG_CALL = {
+    "INSTRUMENT": "ETH-20261030-2800-C",
+    "PRODUCT": "long_call",
+    "UNDERLYING": "ETH",
+    "TOKEN_ID": "native:8453",
+    "STRIKE": 2800,
+    "SIZE": 0.5,
+    "PREMIUM_USD": 40.90,
+}
+
+LONG_PUT = {
+    "INSTRUMENT": "ETH-20261030-2200-P",
+    "PRODUCT": "long_put",
+    "UNDERLYING": "ETH",
+    "TOKEN_ID": "native:8453",
+    "STRIKE": 2200,
+    "SIZE": 1,
+    "PREMIUM_USD": 30,
+}
+
+
 class BevoError(Exception):
     pass
 
