@@ -1,5 +1,13 @@
 # Changelog
 
+## 4
+
+- Any asset Derive lists options on. The heads-up reads Derive's own index for the
+  option (`/options/ticker`), the price it settles against, instead of a DEX price
+  for a pinned Base token. `TOKEN_ID` is no longer required: it is filed only with
+  `DELIVER_ASSET`, for the delivery buy, and `DELIVER_ASSET` without it stops the
+  duty with a clear message. Supersedes @1, @2 and @3.
+
 ## 3
 
 - Watches bought options too: `PRODUCT` `long_call` / `long_put`, with
