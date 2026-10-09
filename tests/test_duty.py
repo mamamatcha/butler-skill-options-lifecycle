@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fake_bevo import CALL, EXPIRY, PUT, BevoError, answer, hours, run  # noqa: E402
+from fake_bevo import CALL, EXPIRY, LONG_CALL, LONG_PUT, PUT, BevoError, answer, hours, run  # noqa: E402
 
 SOURCE = (Path(__file__).resolve().parent.parent / "duty.py").read_text()
 ASKS = re.compile(r"\?|\bsay the word\b|\bwant me to\b|\bshall i\b|\bshould i\b|\breply\b", re.I)
@@ -37,7 +37,7 @@ class HeadsUp(unittest.TestCase):
         fake = run(PUT, [EXPIRY - hours(20), EXPIRY - hours(19)], PRICE)
         self.assertEqual(len(fake.notes), 1)
         self.assertIn("looks set to pay out in full", fake.notes[0])
-        self.assertEqual(fake.read_calls[0], ("/token-stats", {"tokens": "native:8453"}))
+        self.assertIn(("/token-stats", {"tokens": "native:8453"}), fake.read_calls)
         self.assertTrue(fake.state["heads_up_sent"])
 
     def test_put_under_the_strike_warns_of_buying(self):
@@ -158,7 +158,74 @@ class Delivery(unittest.TestCase):
         self.assertEqual(fake.acp_calls, [])
 
 
+def held(*rows):
+    return {"/options/account": {"network": "mainnet", "account": {"exists": True, "positions": list(rows)}}}
+
+
+class BoughtOptions(unittest.TestCase):
+    def test_a_call_in_the_money_says_what_it_would_pay(self):
+        reads = dict(priced("2900"), **held({"instrument": "ETH-20261030-2800-C", "size": 0.5}))
+        fake = run(LONG_CALL, [EXPIRY - hours(5)], reads)
+        self.assertIn("Your call is in the money: if it ends here it pays about $50.00, against the $40.90", fake.notes[0])
+
+    def test_a_put_out_of_the_money_says_what_it_needs(self):
+        reads = dict(priced("2400"), **held({"instrument": "ETH-20261030-2200-P", "size": 1}))
+        fake = run(LONG_PUT, [EXPIRY - hours(5)], reads)
+        self.assertIn("it pays nothing unless ETH ends below $2,200", fake.notes[0])
+
+    def test_a_call_that_pays_reports_the_payout_and_the_net(self):
+        fake = run(LONG_CALL, [SETTLED_AT], settled("3000"))
+        self.assertIn("your call paid $100.00 into your Derive account", fake.dones[0])  # (3000-2800) x 0.5
+        self.assertIn("After the $40.90 it cost, you are up $59.10", fake.dones[0])
+        self.assertIn("The payout is free cash", fake.dones[0])
+        self.assertEqual(fake.acp_calls, [])
+
+    def test_a_call_that_pays_less_than_it_cost_is_down(self):
+        fake = run(LONG_CALL, [SETTLED_AT], settled("2850"))
+        self.assertIn("you are down $15.90", fake.dones[0])  # 25 - 40.90
+
+    def test_a_worthless_put_says_the_premium_is_lost(self):
+        fake = run(LONG_PUT, [SETTLED_AT], settled("2200"))
+        self.assertIn("at or above your $2,200: the put expired worthless, so the $30.00 you paid is lost",
+                      fake.dones[0])
+
+    def test_a_bought_option_never_triggers_a_delivery_buy(self):
+        fake = run(dict(LONG_PUT, DELIVER_ASSET=True), [SETTLED_AT], settled("2000"), acp=[answer(executed=True)])
+        self.assertEqual(fake.acp_calls, [])
+        self.assertIn("your put paid $200.00", fake.dones[0])
+
+    def test_an_option_sold_back_early_finishes_quietly(self):
+        reads = dict(priced("2900"), **held())
+        fake = run(LONG_CALL, [EXPIRY - hours(5)], reads)
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("was sold back before expiry", fake.dones[0])
+        self.assertEqual(fake.notes, [])
+
+    def test_a_note_bought_back_early_finishes_quietly(self):
+        reads = dict(priced("2900"), **held({"instrument": PUT["INSTRUMENT"], "size": 0.5}))
+        fake = run(PUT, [EXPIRY - hours(5)], reads)
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("was bought back before expiry", fake.dones[0])
+        self.assertEqual(fake.notes, [])
+
+    def test_a_note_still_sold_gets_its_heads_up(self):
+        reads = dict(priced("2900"), **held({"instrument": PUT["INSTRUMENT"], "size": -1}))
+        fake = run(PUT, [EXPIRY - hours(5)], reads)
+        self.assertEqual(fake.dones, [])
+        self.assertEqual(len(fake.notes), 1)
+
+    def test_an_unreadable_account_still_sends_the_heads_up(self):
+        reads = dict(priced("2900"))
+        reads["/options/account"] = BevoError("503")
+        fake = run(LONG_CALL, [EXPIRY - hours(5)], reads)
+        self.assertEqual(len(fake.notes), 1)
+
+
 class Settings(unittest.TestCase):
+    def test_a_bought_call_must_be_a_call(self):
+        fake = run(dict(LONG_CALL, PRODUCT="long_put"), [SETTLED_AT], settled("3000"))
+        self.assertIn("is a call but PRODUCT says long_put", fake.notes[0])
+
     def test_the_underlying_must_be_pinned(self):
         for pin in ["", "ETH", "stock:ETH:0", "native:base"]:
             fake = run(dict(PUT, TOKEN_ID=pin), [SETTLED_AT], settled("2200"))

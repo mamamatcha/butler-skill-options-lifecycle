@@ -1,5 +1,16 @@
 # Changelog
 
+## 3
+
+- Watches bought options too: `PRODUCT` `long_call` / `long_put`, with
+  `PREMIUM_USD` the total cost. The heads-up says whether it is in the money and
+  what it would pay; the outcome reports Derive's payout against the cost, or
+  that it expired worthless and the cost is lost. No delivery buy for a bought
+  option.
+- An option closed before expiry finishes the duty quietly at the heads-up,
+  either way: a bought option sold back, or a sold note bought back (checked
+  against `/options/account`).
+
 ## 2
 
 - The underlying is pinned at filing in the new required `TOKEN_ID`
