@@ -1,7 +1,7 @@
 {
   "id": "options-lifecycle",
   "version": 4,
-  "description": "Watch one Derive option to expiry, sold or bought, on any asset Derive lists: a heads-up the day before against Derive's own index, the outcome once it settles, and, only if asked, buying the asset an assigned put agreed to.",
+  "description": "Watch one Derive option to expiry, sold or bought, on any asset Derive lists: a heads-up the day before, the outcome once it settles, and, only if asked, buying the asset an assigned put agreed to.",
   "keywords": [
     "assigned",
     "bought option",
