@@ -164,10 +164,11 @@ def intrinsic(px):
 
 
 def still_held():
-    """Whether the account still holds this bought option. None when unreadable.
+    """Whether the account still holds this option, bought or sold. None when unreadable.
 
-    A bought option can be sold back before expiry; the skill deletes this duty
-    when it is, and this is the duty's own check in case that was missed.
+    A bought option can be sold back, and a sold note bought back, before expiry;
+    the skill deletes this duty when it is, and this is the duty's own check in
+    case that was missed.
     """
     try:
         body = bevo.read("/options/account") or {}
@@ -178,7 +179,8 @@ def still_held():
     if not isinstance(account, dict):
         return None
     for row in account.get("positions") or []:
-        if row.get("instrument") == INSTRUMENT and float(row.get("size") or 0) > 0:
+        size = float(row.get("size") or 0)
+        if row.get("instrument") == INSTRUMENT and (size > 0 if IS_LONG else size < 0):
             return True
     return False
 
@@ -395,9 +397,9 @@ def fire():
 
     if left > 0:
         if not bevo.state.get("heads_up_sent"):
-            if IS_LONG and still_held() is False:
-                bevo.done("%s: your %s was sold back before expiry, so there is nothing left to watch."
-                          % (NAME, INSTRUMENT))
+            if still_held() is False:
+                bevo.done("%s: your %s was %s before expiry, so there is nothing left to watch."
+                          % (NAME, INSTRUMENT, "sold back" if IS_LONG else "bought back"))
             heads_up()
         else:
             say("%s: %.1f hours to expiry, heads-up already sent" % (INSTRUMENT, left / 3600.0))
