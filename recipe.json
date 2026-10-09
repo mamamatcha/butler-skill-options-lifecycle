@@ -1,7 +1,7 @@
 {
   "id": "options-lifecycle",
-  "version": 1,
-  "description": "Watch one yield note to expiry: a heads-up the day before, the outcome the moment it settles, and - if the owner asked for it - buying the asset they have just agreed to buy.",
+  "version": 2,
+  "description": "Watch one Derive yield note to expiry: a heads-up the day before, the outcome once it settles, and, only if the owner asked, buying the asset an assigned put agreed to.",
   "keywords": [
     "yield note",
     "option",
@@ -15,6 +15,9 @@
   "triggers": [
     "timer"
   ],
+  "supersedes": [
+    "options-lifecycle@1"
+  ],
   "keys": [
     "note:<duty>:deliver"
   ],
@@ -25,6 +28,7 @@
       "INSTRUMENT",
       "PRODUCT",
       "UNDERLYING",
+      "TOKEN_ID",
       "STRIKE",
       "SIZE",
       "PREMIUM_USD"
@@ -50,6 +54,12 @@
         "minLength": 2,
         "maxLength": 12
       },
+      "TOKEN_ID": {
+        "type": "string",
+        "minLength": 8,
+        "maxLength": 80,
+        "description": "The underlying pinned to one token when the duty is filed, from the /token-search row for UNDERLYING: native:<chainId> for the chain's coin (ETH on Base is native:8453), <address>:<chainId> for a token such as cbBTC. The heads-up prices exactly this pin with /token-stats and the delivery buy trades it on its chain."
+      },
       "STRIKE": {
         "type": "number",
         "description": "The price the owner agreed to buy at (put) or sell at (call).",
@@ -63,23 +73,18 @@
       "PREMIUM_USD": {
         "type": "number",
         "minimum": 0,
-        "description": "What the owner actually kept at open, after Derive's fee. This is the number quoted back to them at expiry, so it must be the net figure, not the gross."
+        "description": "What the owner kept at open, net of Derive's fee: the filled premium minus the fee, exactly as the open reported it. Quoted back at expiry, so never the gross."
       },
       "COLLATERAL_USD": {
         "type": "number",
         "minimum": 0,
         "default": 0,
-        "description": "USDC locked behind a put. 0 for a covered call, which is collateralised by the asset itself."
+        "description": "USDC locked behind a put, as the open reported it. 0 for a covered call, which is collateralised by the asset itself."
       },
       "DELIVER_ASSET": {
         "type": "boolean",
         "default": false,
-        "description": "Only for a put that lands in the money. Derive settles in cash, so the owner is simply down money and holds no asset. With this on, the duty files a spot buy for SIZE of the underlying, which is what makes 'you now own it at the strike' true. Off by default: it spends money, so the owner has to have asked."
-      },
-      "CHAIN_ID": {
-        "type": "integer",
-        "default": 8453,
-        "description": "Chain for the DELIVER_ASSET buy: 1 Ethereum, 8453 Base, 42161 Arbitrum."
+        "description": "Only for a put that settles in the money. Derive settles in cash, so the owner holds the loss in cash and no asset. With this on, the duty spends SIZE x the settlement price of wallet USDC buying the TOKEN_ID token on its chain. Off by default: it spends money, so the owner has to have asked."
       },
       "HEADS_UP_HOURS": {
         "type": "number",
