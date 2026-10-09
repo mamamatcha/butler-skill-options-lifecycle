@@ -7,8 +7,9 @@
   what it would pay; the outcome reports Derive's payout against the cost, or
   that it expired worthless and the cost is lost. No delivery buy for a bought
   option.
-- A bought option sold back before expiry finishes the duty quietly at the
-  heads-up (checked against `/options/account`).
+- An option closed before expiry finishes the duty quietly at the heads-up,
+  either way: a bought option sold back, or a sold note bought back (checked
+  against `/options/account`).
 
 ## 2
 

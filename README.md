@@ -23,7 +23,7 @@ Expiry and option type are read back out of `INSTRUMENT` (`ETH-20261030-2450-P` 
 - **Retry the delivery buy.** It has one key; an unclear answer is checked with `exec_status`, never re-sent.
 - **Price or buy by ticker.** The underlying is the token pinned in `TOKEN_ID` at filing; the heads-up prices that pin with `/token-stats` and the delivery buy trades it on its own chain. An empty price read skips the heads-up for that tick.
 - **Move collateral.** After settlement the collateral sits free in the Derive account; withdrawing it is a separate `acp options withdraw`.
-- **Watch an option that was sold back.** A bought option closed early finishes the duty quietly at the heads-up (it checks `/options/account`); the skill normally deletes the duty on the close.
+- **Watch an option that was closed early.** A bought option sold back, or a sold note bought back, finishes the duty quietly at the heads-up (it checks `/options/account`); the skill normally deletes the duty on the close.
 - **Open, roll or close anything.** It only watches the one it was filed for.
 
 ## Settings

@@ -37,7 +37,7 @@ class HeadsUp(unittest.TestCase):
         fake = run(PUT, [EXPIRY - hours(20), EXPIRY - hours(19)], PRICE)
         self.assertEqual(len(fake.notes), 1)
         self.assertIn("looks set to pay out in full", fake.notes[0])
-        self.assertEqual(fake.read_calls[0], ("/token-stats", {"tokens": "native:8453"}))
+        self.assertIn(("/token-stats", {"tokens": "native:8453"}), fake.read_calls)
         self.assertTrue(fake.state["heads_up_sent"])
 
     def test_put_under_the_strike_warns_of_buying(self):
@@ -200,6 +200,19 @@ class BoughtOptions(unittest.TestCase):
         self.assertEqual(len(fake.dones), 1)
         self.assertIn("was sold back before expiry", fake.dones[0])
         self.assertEqual(fake.notes, [])
+
+    def test_a_note_bought_back_early_finishes_quietly(self):
+        reads = dict(priced("2900"), **held({"instrument": PUT["INSTRUMENT"], "size": 0.5}))
+        fake = run(PUT, [EXPIRY - hours(5)], reads)
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("was bought back before expiry", fake.dones[0])
+        self.assertEqual(fake.notes, [])
+
+    def test_a_note_still_sold_gets_its_heads_up(self):
+        reads = dict(priced("2900"), **held({"instrument": PUT["INSTRUMENT"], "size": -1}))
+        fake = run(PUT, [EXPIRY - hours(5)], reads)
+        self.assertEqual(fake.dones, [])
+        self.assertEqual(len(fake.notes), 1)
 
     def test_an_unreadable_account_still_sends_the_heads_up(self):
         reads = dict(priced("2900"))
