@@ -9,10 +9,12 @@ Three moments matter and the owner should never have to ask about any of them:
     settlement       what they kept, or what they agreed to buy or sell
     after that       the asset itself, if they asked to actually own it
 
-A duty has no network of its own, so the settlement price comes through the
-options rail (`bevo.read("/options/settlement")`). The underlying is the token
-pinned in TOKEN_ID when the duty was filed: the heads-up prices exactly that
-pin with `/token-stats`, and the delivery buy trades the same pin.
+A duty has no network of its own, so both prices come through the options
+rail: the heads-up reads Derive's own index for this option
+(`bevo.read("/options/ticker")`), the price it will settle against, and the
+settlement comes from `bevo.read("/options/settlement")`. That works for every
+currency Derive lists options on. TOKEN_ID pins the underlying to a token only
+for the delivery buy, which trades that pin on its own chain.
 
 Derive settles options in **cash**. An in-the-money put reduces USDC; it does
 not hand over ETH. So "you now own 2.04 ETH" is only true when DELIVER_ASSET is
@@ -148,9 +150,12 @@ def parse_pin(pin):
 
 PIN = parse_pin(TOKEN_ID) if TOKEN_ID else None
 
-if not PROBLEM and not PIN:
+# The pin is only ever traded, so it is only needed when a trade can happen.
+if not PROBLEM and TOKEN_ID and not PIN:
     PROBLEM = ("TOKEN_ID %r is not a pinned token like native:8453 or <address>:<chainId>"
                % TOKEN_ID)
+elif not PROBLEM and DELIVER_ASSET and not PIN:
+    PROBLEM = "DELIVER_ASSET needs TOKEN_ID, the token to buy, like native:8453"
 
 EXPIRY = DETAIL["expiry"] if DETAIL else 0
 IS_PUT = PRODUCT == "cash_secured_put"
@@ -186,15 +191,18 @@ def still_held():
 
 
 def spot_now():
-    """What the pinned underlying is worth right now, or None for no price this run.
+    """Derive's index for this option's underlying right now, or None for no price this run.
 
-    For the heads-up only; settlement never reads this, Derive settles on its
-    own index. An empty answer is a gap, not a zero.
+    For the heads-up only; settlement never reads this. It is the venue's own
+    index, the number the option settles against, so it needs no token pin and
+    works for any currency Derive lists. An empty answer is a gap, not a zero.
     """
-    rows = (bevo.read("/token-stats", {"tokens": TOKEN_ID}) or {}).get("tokens") or []
-    if not rows or rows[0].get("priceUsd") is None:
+    body = bevo.read("/options/ticker", {"instrument": INSTRUMENT}) or {}
+    value = body.get("index")
+    if value in (None, ""):
         return None
-    return float(rows[0]["priceUsd"])
+    spot = float(value)
+    return spot if spot > 0 else None
 
 
 def settlement_price():
@@ -220,7 +228,7 @@ def heads_up():
         say("could not read the price for the heads-up: %s" % exc)
         return
     if spot is None:
-        say("no price for %s this run; the heads-up waits for the next tick" % TOKEN_ID)
+        say("no index for %s this run; the heads-up waits for the next tick" % INSTRUMENT)
         return
 
     hours = max(0, (EXPIRY - time.time()) / 3600.0)

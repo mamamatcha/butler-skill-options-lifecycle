@@ -17,7 +17,8 @@ ASKS = re.compile(r"\?|\bsay the word\b|\bwant me to\b|\bshall i\b|\bshould i\b|
 
 SETTLED_AT = EXPIRY + hours(1)
 def priced(value):
-    return {"/token-stats": {"tokens": [{"priceUsd": value, "priceChangeH24": -1.2}]}}
+    return {"/options/ticker": {"instrument": "ETH-20261030-2450-P", "index": value, "mark": "12.3",
+                                "bid": "11.9", "ask": "12.8", "asOf": 1793260800000}}
 
 
 PRICE = priced("2705.5")
@@ -37,7 +38,7 @@ class HeadsUp(unittest.TestCase):
         fake = run(PUT, [EXPIRY - hours(20), EXPIRY - hours(19)], PRICE)
         self.assertEqual(len(fake.notes), 1)
         self.assertIn("looks set to pay out in full", fake.notes[0])
-        self.assertIn(("/token-stats", {"tokens": "native:8453"}), fake.read_calls)
+        self.assertIn(("/options/ticker", {"instrument": "ETH-20261030-2450-P"}), fake.read_calls)
         self.assertTrue(fake.state["heads_up_sent"])
 
     def test_put_under_the_strike_warns_of_buying(self):
@@ -49,13 +50,13 @@ class HeadsUp(unittest.TestCase):
         self.assertIn("your ETH may be sold at $3,000", fake.notes[0])
 
     def test_an_empty_price_read_is_a_gap_not_a_zero_and_never_a_failure(self):
-        fake = run(PUT, [EXPIRY - hours(5), EXPIRY - hours(4)], {"/token-stats": {"tokens": []}})
+        fake = run(PUT, [EXPIRY - hours(5), EXPIRY - hours(4)], {"/options/ticker": {"index": None}})
         self.assertEqual(fake.notes, [])
         self.assertEqual(fake.fails, [])
         self.assertNotIn("heads_up_sent", fake.state)
 
     def test_an_unreadable_price_skips_quietly_and_retries(self):
-        fake = run(PUT, [EXPIRY - hours(5)], {"/token-stats": BevoError("down")})
+        fake = run(PUT, [EXPIRY - hours(5)], {"/options/ticker": BevoError("down")})
         self.assertEqual(fake.notes, [])
         self.assertNotIn("heads_up_sent", fake.state)
 
@@ -226,11 +227,31 @@ class Settings(unittest.TestCase):
         fake = run(dict(LONG_CALL, PRODUCT="long_put"), [SETTLED_AT], settled("3000"))
         self.assertIn("is a call but PRODUCT says long_put", fake.notes[0])
 
-    def test_the_underlying_must_be_pinned(self):
-        for pin in ["", "ETH", "stock:ETH:0", "native:base"]:
+    def test_a_malformed_pin_stops_the_duty(self):
+        for pin in ["ETH", "stock:ETH:0", "native:base"]:
             fake = run(dict(PUT, TOKEN_ID=pin), [SETTLED_AT], settled("2200"))
             self.assertIn("is not a pinned token", fake.notes[0], pin)
             self.assertEqual(fake.read_calls, [])
+
+    def test_delivery_needs_a_pin_but_watching_does_not(self):
+        fake = run(dict(PUT, TOKEN_ID="", DELIVER_ASSET=True), [SETTLED_AT], settled("2200"))
+        self.assertIn("DELIVER_ASSET needs TOKEN_ID", fake.notes[0])
+        self.assertEqual(fake.read_calls, [])
+        fake = run(dict(PUT, TOKEN_ID=""), [SETTLED_AT], settled("2200"))
+        self.assertIn("agreed to buy", fake.dones[0])
+        self.assertIn("holding the loss in cash", fake.dones[0])
+
+    def test_any_derive_currency_is_watched_without_a_token_pin(self):
+        sol = {"INSTRUMENT": "SOL-20261030-150-C", "PRODUCT": "long_call", "UNDERLYING": "SOL",
+               "STRIKE": 150, "SIZE": 2, "PREMIUM_USD": 18.4}
+        ticker = {"/options/ticker": {"instrument": "SOL-20261030-150-C", "index": "162.4", "mark": "14.1"}}
+        fake = run(sol, [EXPIRY - hours(5)], ticker)
+        self.assertIn(("/options/ticker", {"instrument": "SOL-20261030-150-C"}), fake.read_calls)
+        self.assertIn("SOL is at $162. Your call", fake.notes[0])
+        self.assertIn("is in the money", fake.notes[0])
+        self.assertIn("pays about $24.80", fake.notes[0])
+        fake = run(sol, [SETTLED_AT], {"/options/settlement": {"price": "170"}})
+        self.assertIn("your call paid $40.00", fake.dones[0])
 
     def test_a_put_filed_as_a_call_does_nothing(self):
         fake = run(dict(PUT, PRODUCT="covered_call"), [SETTLED_AT], settled("2200"))

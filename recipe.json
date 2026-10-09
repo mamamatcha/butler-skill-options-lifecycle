@@ -1,7 +1,7 @@
 {
   "id": "options-lifecycle",
-  "version": 3,
-  "description": "Watch one Derive option to expiry, sold or bought: a heads-up the day before, the outcome once it settles, and, only if asked, buying the asset an assigned put agreed to.",
+  "version": 4,
+  "description": "Watch one Derive option to expiry, sold or bought, on any asset Derive lists: a heads-up the day before, the outcome once it settles, and, only if asked, buying the asset an assigned put agreed to.",
   "keywords": [
     "assigned",
     "bought option",
@@ -22,7 +22,8 @@
   ],
   "supersedes": [
     "options-lifecycle@1",
-    "options-lifecycle@2"
+    "options-lifecycle@2",
+    "options-lifecycle@3"
   ],
   "keys": [
     "note:<duty>:deliver"
@@ -34,7 +35,6 @@
       "INSTRUMENT",
       "PRODUCT",
       "UNDERLYING",
-      "TOKEN_ID",
       "STRIKE",
       "SIZE",
       "PREMIUM_USD"
@@ -58,7 +58,7 @@
       },
       "UNDERLYING": {
         "type": "string",
-        "description": "The asset ticker: ETH, BTC. Used for the settlement read and, if DELIVER_ASSET is on, the spot buy.",
+        "description": "The asset ticker, the prefix of INSTRUMENT: ETH, BTC, SOL, XRP, HYPE or any other currency Derive lists options on. Used for the settlement read.",
         "minLength": 2,
         "maxLength": 12
       },
@@ -66,7 +66,7 @@
         "type": "string",
         "minLength": 8,
         "maxLength": 80,
-        "description": "The underlying pinned to one token when the duty is filed, from the /token-search row for UNDERLYING: native:<chainId> for the chain's coin (ETH on Base is native:8453), <address>:<chainId> for a token such as cbBTC. The heads-up prices exactly this pin with /token-stats and the delivery buy trades it on its chain."
+        "description": "Only with DELIVER_ASSET: the token the delivery buy trades, pinned from the /token-search row for UNDERLYING when the duty is filed. native:<chainId> for a chain's coin (ETH on Base is native:8453), <address>:<chainId> for a token such as cbBTC. The heads-up does not need it: it reads Derive's own index for the option."
       },
       "STRIKE": {
         "type": "number",
@@ -92,7 +92,7 @@
       "DELIVER_ASSET": {
         "type": "boolean",
         "default": false,
-        "description": "Only for a sold put that settles in the money (cash_secured_put). Derive settles in cash, so the owner holds the loss in cash and no asset. With this on, the duty spends SIZE x the settlement price of wallet USDC buying the TOKEN_ID token on its chain. Off by default: it spends money, so the owner has to have asked."
+        "description": "Only for a sold put that settles in the money (cash_secured_put). Derive settles in cash, so the owner holds the loss in cash and no asset. With this on, the duty spends SIZE x the settlement price of wallet USDC buying the TOKEN_ID token on its chain, so TOKEN_ID is required with it. Off by default: it spends money, so the owner has to have asked."
       },
       "HEADS_UP_HOURS": {
         "type": "number",
