@@ -1,51 +1,45 @@
-# butler-skill-options-lifecycle
+# options-lifecycle
 
-The `options-lifecycle` duty template for [Butler](https://github.com/Virtual-Protocol/butler-skills).
-Filed by the `yield-notes` skill, one duty per open note.
+Watches one yield note on Derive, a single option the owner sold fully collateralised, from the fill to the outcome. The yield-notes skill files it once `acp options open` has confirmed the fill, one duty per note, with the fill's own numbers as settings.
+
+## How it is filed
+
+Filed with `recipe: "options-lifecycle@2"` only after the open is confirmed (`bevo-read request <key> --route options` reads `approvalStatus: confirmed`). The settings are copied from its `approvalOutcome`, never from the quote: `INSTRUMENT` and `STRIKE` as filled, `SIZE` = `filledSize`, `PREMIUM_USD` = `netPremiumUsd`, `COLLATERAL_USD` = `collateral`. `TOKEN_ID` pins the underlying from its `/token-search` row (`native:8453` for ETH on Base). A note whose open is unknown, refused or pending gets no duty.
 
 ## What it does
 
-Watches a single yield note from open to outcome:
-
-| When | What the owner gets |
+| When | The owner gets |
 | --- | --- |
-| `HEADS_UP_HOURS` before expiry | where the asset is, and which way the note is leaning |
-| at settlement | what they kept, or what they have just bought — with the number |
-| after an assigned put | the asset itself, if `DELIVER_ASSET` is on |
+| `HEADS_UP_HOURS` before expiry, once | where the asset is, and which way the note is leaning |
+| after the 08:00 UTC expiry, once Derive publishes the price | what they kept, or what they agreed to buy or sell, with the numbers; then the duty finishes |
+| after an assigned put, only with `DELIVER_ASSET` on | a spot buy of the underlying, through `acp trade`, keyed `note:<duty>:deliver` |
 
-## Why it needs no options rail
+Expiry and option type are read back out of `INSTRUMENT` (`ETH-20261030-2450-P` expires 2026-10-30 08:00 UTC) and cross-checked against `PRODUCT` and `UNDERLYING`; a mismatch stops the duty rather than guessing.
 
-Every read is Derive's **public** API. The note's details arrive as settings when the
-duty is filed, and Derive publishes settlement prices openly
-(`public/get_option_settlement_prices`), so the outcome is computable with no key, no
-session and no server-side rail.
+## What it will not do
 
-That matters twice: the lifecycle works *before* the rail exists, and it keeps
-working if a session key is ever rotated or revoked. The only money path is the
-optional delivery buy, which goes through `acp trade` — an existing money command
-with its own approval card and idempotency key.
-
-## The one thing it must never get wrong
-
-**Derive settles in cash.** An in-the-money put reduces USDC; it does not hand over
-ETH. So the duty only says "you have bought 2.04 ETH" when `DELIVER_ASSET` is on and
-the spot buy has actually been filed. Otherwise it says the owner is holding the
-loss and offers to buy — because that is what has happened.
+- **Say "you now own" without a filled buy.** Derive settles in cash: an assigned put leaves the owner holding the loss in USDC, not the asset. Only an executed delivery buy changes that, and a pending, refused or unknown one is reported as such.
+- **Guess a settlement.** No price published yet means it waits quietly; past 6 hours it says so once. An unreadable settlement read is reported as the read being broken, never as an outcome.
+- **Retry the delivery buy.** It has one key; an unclear answer is checked with `exec_status`, never re-sent.
+- **Price or buy by ticker.** The underlying is the token pinned in `TOKEN_ID` at filing; the heads-up prices that pin with `/token-stats` and the delivery buy trades it on its own chain. An empty price read skips the heads-up for that tick.
+- **Move collateral.** After settlement the collateral sits free in the Derive account; withdrawing it is a separate `acp options withdraw`.
+- **Open, roll or close a note.** It only watches the one it was filed for.
 
 ## Settings
 
-See `recipe.json`. `INSTRUMENT` must be the exact Derive name that was filled
-(`ETH-20261030-2450-P`) — expiry and option type are read back out of it, and
-cross-checked against `PRODUCT` and `STRIKE`. A mismatch stops the duty rather than
-guessing.
+| Name | Unit | Means |
+| --- | --- | --- |
+| `INSTRUMENT` | Derive name | the option sold, exactly as filled |
+| `PRODUCT` | `cash_secured_put` \| `covered_call` | must match the `P`/`C` in `INSTRUMENT` |
+| `UNDERLYING` | ticker | `ETH`, `BTC`; the prefix of `INSTRUMENT` |
+| `TOKEN_ID` | pin | `native:<chainId>` or `<address>:<chainId>`: the one token priced and, on delivery, bought |
+| `STRIKE` | US dollars | the price agreed to buy (put) or sell (call) at |
+| `SIZE` | contracts = units of the underlying | as filled |
+| `PREMIUM_USD` | US dollars | net of Derive's fee |
+| `COLLATERAL_USD` | US dollars | USDC locked behind a put; `0` for a call |
+| `DELIVER_ASSET` | on/off, default **off** | buy the `TOKEN_ID` token after an assigned put, spending SIZE x the settlement price of wallet USDC on its chain |
+| `HEADS_UP_HOURS` | hours, default `24` | how long before expiry the heads-up goes out |
 
-`PREMIUM_USD` must be the **net** figure after Derive's fee, because that is the
-number quoted back to the owner at expiry.
+## Trigger
 
-`DELIVER_ASSET` defaults to **off**: it spends money, so the owner has to have asked.
-
-## Validating a change
-
-Run the hub's duty validator against this directory. A duty is checked harder than a
-skill: imports are limited to the SDK plus a small stdlib allowlist, there is no
-network of its own, and only `acp trade`, `acp wallet` and `acp card` may move money.
+`{"kind": "timer", "intervalSeconds": 900}`. Settlement is usually published within minutes of 08:00 UTC, so a 15-minute timer reports it within the half hour.
