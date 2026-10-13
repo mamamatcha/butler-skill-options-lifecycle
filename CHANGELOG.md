@@ -1,5 +1,16 @@
 # Changelog
 
+## 5
+
+- Checks `/options/account` every tick until expiry, not only at the heads-up, so an
+  option sold back or bought back ends the duty within half an hour even when the
+  skill forgot to delete it. Seen live: a sell-back filled and the duty kept running.
+  It also closes a gap: an option closed after the heads-up used to run on to
+  settlement and be reported as if still held. Two "not held" reads in a row are
+  needed, so one empty read never costs a holder their heads-up; an unreadable account
+  still never ends a duty. Supersedes @1 to @4; a duty already filed keeps its own
+  `duty.py`.
+
 ## 4
 
 - Any asset Derive lists options on. The heads-up reads Derive's own index for the
