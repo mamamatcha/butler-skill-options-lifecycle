@@ -1,6 +1,6 @@
 {
   "id": "options-lifecycle",
-  "version": 4,
+  "version": 5,
   "description": "Watch one Derive option to expiry, sold or bought, on any asset Derive lists: a heads-up the day before, the outcome once it settles, and, only if asked, buying the asset an assigned put agreed to.",
   "keywords": [
     "assigned",
@@ -23,7 +23,8 @@
   "supersedes": [
     "options-lifecycle@1",
     "options-lifecycle@2",
-    "options-lifecycle@3"
+    "options-lifecycle@3",
+    "options-lifecycle@4"
   ],
   "keys": [
     "note:<duty>:deliver"

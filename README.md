@@ -4,7 +4,7 @@ Watches one Derive option from the fill to the outcome: a note the owner **sold*
 
 ## How it is filed
 
-Filed with `recipe: "options-lifecycle@4"` only once `bevo-read request <key> --route options` reads `approvalStatus: confirmed`, with settings from its `approvalOutcome`, never the quote: `INSTRUMENT` and `STRIKE` as filled, `SIZE` = `filledSize`, `PREMIUM_USD` = `netPremiumUsd` (sold) or `totalCostUsd` (bought), `COLLATERAL_USD` = `collateral` (0 if bought). `TOKEN_ID` only with `DELIVER_ASSET`: the token the delivery buy trades, from its `/token-search` row (`native:8453` for ETH on Base). An unknown, refused or pending open gets no duty.
+Filed with `recipe: "options-lifecycle@5"` only once `bevo-read request <key> --route options` reads `approvalStatus: confirmed`, with settings from its `approvalOutcome`, never the quote: `INSTRUMENT` and `STRIKE` as filled, `SIZE` = `filledSize`, `PREMIUM_USD` = `netPremiumUsd` (sold) or `totalCostUsd` (bought), `COLLATERAL_USD` = `collateral` (0 if bought). `TOKEN_ID` only with `DELIVER_ASSET`: the token the delivery buy trades, from its `/token-search` row (`native:8453` for ETH on Base). An unknown, refused or pending open gets no duty.
 
 ## What it does
 
@@ -23,7 +23,7 @@ Expiry and option type are read out of `INSTRUMENT` (`ETH-20261030-2450-P` expir
 - **Retry the delivery buy.** It has one key; an unclear answer is checked with `exec_status`, never re-sent.
 - **Price off a DEX, or buy by ticker.** The heads-up reads Derive's index for this option (`/options/ticker`), the price it settles against; an empty read skips the heads-up for that tick. The delivery buy trades only the token pinned in `TOKEN_ID`, on its own chain.
 - **Move collateral.** After settlement the collateral sits free in the Derive account; withdrawing it is a separate `acp options withdraw`.
-- **Watch an option closed early.** Sold back or bought back, it finishes quietly at the heads-up (checked against `/options/account`); the skill normally deletes the duty on the close.
+- **Watch an option closed early.** Sold or bought back, it finishes quietly after two `/options/account` reads in a row without it, before expiry; the skill normally deletes the duty on the close.
 - **Open, roll or close anything.** It only watches the one it was filed for.
 
 ## Settings
