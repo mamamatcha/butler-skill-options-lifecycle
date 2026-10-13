@@ -29,10 +29,10 @@ def settled(value):
 
 
 class HeadsUp(unittest.TestCase):
-    def test_nothing_while_far_from_expiry(self):
+    def test_nothing_but_the_account_check_while_far_from_expiry(self):
         fake = run(PUT, [EXPIRY - hours(72)], PRICE)
         self.assertEqual(fake.notes, [])
-        self.assertEqual(fake.read_calls, [])
+        self.assertEqual([path for path, _ in fake.read_calls], ["/options/account"])
 
     def test_once_inside_the_window_with_the_ticker_read_by_q(self):
         fake = run(PUT, [EXPIRY - hours(20), EXPIRY - hours(19)], PRICE)
@@ -195,20 +195,6 @@ class BoughtOptions(unittest.TestCase):
         self.assertEqual(fake.acp_calls, [])
         self.assertIn("your put paid $200.00", fake.dones[0])
 
-    def test_an_option_sold_back_early_finishes_quietly(self):
-        reads = dict(priced("2900"), **held())
-        fake = run(LONG_CALL, [EXPIRY - hours(5)], reads)
-        self.assertEqual(len(fake.dones), 1)
-        self.assertIn("was sold back before expiry", fake.dones[0])
-        self.assertEqual(fake.notes, [])
-
-    def test_a_note_bought_back_early_finishes_quietly(self):
-        reads = dict(priced("2900"), **held({"instrument": PUT["INSTRUMENT"], "size": 0.5}))
-        fake = run(PUT, [EXPIRY - hours(5)], reads)
-        self.assertEqual(len(fake.dones), 1)
-        self.assertIn("was bought back before expiry", fake.dones[0])
-        self.assertEqual(fake.notes, [])
-
     def test_a_note_still_sold_gets_its_heads_up(self):
         reads = dict(priced("2900"), **held({"instrument": PUT["INSTRUMENT"], "size": -1}))
         fake = run(PUT, [EXPIRY - hours(5)], reads)
@@ -220,6 +206,75 @@ class BoughtOptions(unittest.TestCase):
         reads["/options/account"] = BevoError("503")
         fake = run(LONG_CALL, [EXPIRY - hours(5)], reads)
         self.assertEqual(len(fake.notes), 1)
+
+
+def reads_in_turn(*answers):
+    """An /options/account fixture that answers each read with the next row set."""
+    queue = list(answers)
+    return lambda _params: queue.pop(0) if len(queue) > 1 else queue[0]
+
+
+def account(*rows):
+    return {"network": "mainnet", "account": {"exists": True, "positions": list(rows)}}
+
+
+class ClosedEarly(unittest.TestCase):
+    TICK = 900
+
+    def ticks(self, start, n=2):
+        return [start + self.TICK * i for i in range(n)]
+
+    def test_an_option_sold_back_early_finishes_quietly(self):
+        fake = run(LONG_CALL, self.ticks(EXPIRY - hours(5)), dict(priced("2900"), **held()))
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("was sold back before expiry", fake.dones[0])
+        self.assertEqual(fake.notes, [])
+
+    def test_a_note_bought_back_early_finishes_quietly(self):
+        reads = dict(priced("2900"), **held({"instrument": PUT["INSTRUMENT"], "size": 0.5}))
+        fake = run(PUT, self.ticks(EXPIRY - hours(5)), reads)
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("was bought back before expiry", fake.dones[0])
+        self.assertEqual(fake.notes, [])
+
+    def test_a_close_days_before_the_heads_up_ends_the_duty_then(self):
+        fake = run(LONG_CALL, self.ticks(EXPIRY - hours(240)), held())
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("was sold back before expiry", fake.dones[0])
+        self.assertNotIn("/options/ticker", [path for path, _ in fake.read_calls])
+
+    def test_a_close_after_the_heads_up_ends_the_duty_before_any_outcome(self):
+        fake = run(LONG_CALL, self.ticks(EXPIRY - hours(5), 3) + [SETTLED_AT],
+                   dict(priced("2900"), **settled("3000"), **held()), state={"heads_up_sent": True})
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("was sold back before expiry", fake.dones[0])
+        self.assertNotIn("/options/settlement", [path for path, _ in fake.read_calls])
+
+    def test_one_empty_read_waits_and_sends_no_heads_up_that_tick(self):
+        fake = run(LONG_CALL, [EXPIRY - hours(5)], dict(priced("2900"), **held()))
+        self.assertEqual(fake.dones, [])
+        self.assertEqual(fake.notes, [])
+        self.assertEqual(fake.state["not_held_reads"], 1)
+
+    def test_a_blip_then_held_sends_the_heads_up_and_resets(self):
+        reads = dict(priced("2900"))
+        reads["/options/account"] = reads_in_turn(account(), account({"instrument": LONG_CALL["INSTRUMENT"], "size": 0.5}))
+        fake = run(LONG_CALL, self.ticks(EXPIRY - hours(5)), reads)
+        self.assertEqual(fake.dones, [])
+        self.assertEqual(len(fake.notes), 1)
+        self.assertEqual(fake.state["not_held_reads"], 0)
+
+    def test_an_unreadable_account_never_ends_the_duty(self):
+        reads = dict(priced("2900"), **settled("3000"))
+        reads["/options/account"] = BevoError("503")
+        fake = run(LONG_CALL, self.ticks(EXPIRY - hours(30), 8) + [SETTLED_AT], reads)
+        self.assertEqual(len(fake.dones), 1)
+        self.assertIn("your call paid $100.00", fake.dones[0])
+
+    def test_after_expiry_the_account_is_never_read(self):
+        fake = run(LONG_CALL, [SETTLED_AT], dict(settled("3000"), **held()))
+        self.assertNotIn("/options/account", [path for path, _ in fake.read_calls])
+        self.assertIn("your call paid", fake.dones[0])
 
 
 class Settings(unittest.TestCase):

@@ -190,6 +190,23 @@ def still_held():
     return False
 
 
+def closed_early():
+    """"closed", "unsure" or "held", from this tick's account read.
+
+    Two "not held" reads in a row, 15 minutes apart, before it counts: ending
+    early on one empty read would cost an owner who still holds the option its
+    heads-up and its outcome. An unreadable account is held; it never ends a duty.
+    """
+    held = still_held()
+    if held is False:
+        misses = int(bevo.state.get("not_held_reads") or 0) + 1
+        bevo.state["not_held_reads"] = misses
+        return "closed" if misses >= 2 else "unsure"
+    if held is True:
+        bevo.state["not_held_reads"] = 0
+    return "held"
+
+
 def spot_now():
     """Derive's index for this option's underlying right now, or None for no price this run.
 
@@ -399,15 +416,23 @@ def settle():
 def fire():
     left = EXPIRY - time.time()
 
+    # Every tick until expiry, so a close the skill forgot to clean up still ends
+    # the duty. After expiry the position is gone either way and says nothing.
+    if left > 0:
+        seen = closed_early()
+        if seen == "closed":
+            bevo.done("%s: your %s was %s before expiry, so there is nothing left to watch."
+                      % (NAME, INSTRUMENT, "sold back" if IS_LONG else "bought back"))
+        if seen == "unsure":
+            say("%s is not in the account on this read; checking again next tick" % INSTRUMENT)
+            return
+
     if left > HEADS_UP_HOURS * 3600:
         say("%s: %.1f days to expiry" % (INSTRUMENT, left / 86400.0))
         return
 
     if left > 0:
         if not bevo.state.get("heads_up_sent"):
-            if still_held() is False:
-                bevo.done("%s: your %s was %s before expiry, so there is nothing left to watch."
-                          % (NAME, INSTRUMENT, "sold back" if IS_LONG else "bought back"))
             heads_up()
         else:
             say("%s: %.1f hours to expiry, heads-up already sent" % (INSTRUMENT, left / 3600.0))
