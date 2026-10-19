@@ -1,5 +1,11 @@
 # Changelog
 
+## 6
+
+- Reports a status line for the owner's Duties row, which read "nothing yet": "Settles in 3
+  days · next check 9am", then "Waiting for settlement", "Settled at $64,210" or "Closed
+  before expiry". `recipe.json` `status` words each state. Supersedes `options-lifecycle@5`.
+
 ## 5
 
 - Checks `/options/account` every tick until expiry, not only at the heads-up, so an
