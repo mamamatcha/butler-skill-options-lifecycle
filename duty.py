@@ -368,6 +368,7 @@ def settle():
             bevo.notify("%s: your note has expired and I cannot read what it settled at, so I "
                         "will not guess. Your money is not at risk from this - it is my read "
                         "that is broken. I will keep trying." % NAME)
+        bevo.status("settling")
         bevo.fail("settlement unreadable: %s" % exc)
         return
 
@@ -379,6 +380,7 @@ def settle():
                         % (NAME, round(late / 3600)))
         else:
             say("settlement not published yet (%d min past expiry)" % round(late / 60))
+        bevo.status("settling")
         return
 
     headline, assigned = outcome_sentences(settled)
@@ -410,6 +412,7 @@ def settle():
     else:
         tail += " What is left of your %s collateral is free again in your Derive account." % UNDERLYING
 
+    bevo.status("done", price=settled)
     bevo.done("%s: %s%s" % (NAME, headline, tail))
 
 
@@ -421,11 +424,22 @@ def fire():
     if left > 0:
         seen = closed_early()
         if seen == "closed":
+            bevo.status("closed")
             bevo.done("%s: your %s was %s before expiry, so there is nothing left to watch."
                       % (NAME, INSTRUMENT, "sold back" if IS_LONG else "bought back"))
         if seen == "unsure":
             say("%s is not in the account on this read; checking again next tick" % INSTRUMENT)
+            bevo.status("unseen")
             return
+
+    # The owner's Duties row: recipe.json `status` words each state.
+    if left > 0:
+        if left >= 2 * 86400:
+            bevo.status("days", days=int(left // 86400))
+        elif left >= 2 * 3600:
+            bevo.status("hours", hours=int(left // 3600))
+        else:
+            bevo.status("soon")
 
     if left > HEADS_UP_HOURS * 3600:
         say("%s: %.1f days to expiry" % (INSTRUMENT, left / 86400.0))
@@ -440,6 +454,7 @@ def fire():
 
     if -left < SETTLE_GRACE_SECONDS:
         say("%s expired %d min ago; waiting for the settlement price" % (INSTRUMENT, round(-left / 60)))
+        bevo.status("settling")
         return
 
     settle()
@@ -447,9 +462,11 @@ def fire():
 
 if PROBLEM:
     bevo.notify("%s does nothing until its settings are fixed: %s." % (NAME, PROBLEM))
+    bevo.status("paused")
 
 for tick in bevo.ticks():
     if PROBLEM:
+        bevo.status("paused")
         bevo.fail("settings: %s" % PROBLEM)
         continue
     fire()

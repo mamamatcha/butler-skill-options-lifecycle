@@ -1,6 +1,6 @@
 {
   "id": "options-lifecycle",
-  "version": 5,
+  "version": 6,
   "description": "Watch one Derive option to expiry, sold or bought, on any asset Derive lists: a heads-up the day before, the outcome once it settles, and, only if asked, buying the asset an assigned put agreed to.",
   "keywords": [
     "assigned",
@@ -24,7 +24,8 @@
     "options-lifecycle@1",
     "options-lifecycle@2",
     "options-lifecycle@3",
-    "options-lifecycle@4"
+    "options-lifecycle@4",
+    "options-lifecycle@5"
   ],
   "keys": [
     "note:<duty>:deliver"
@@ -103,5 +104,16 @@
         "description": "How long before expiry to send the heads-up. Sent once."
       }
     }
+  },
+  "status": {
+    "starting": "First check {next}",
+    "days": "Settles in {days} days · next check {next}",
+    "hours": "Settles in {hours} hours · next check {next}",
+    "unseen": "Position not found · next check {next}",
+    "settling": "Waiting for settlement · next check {next}",
+    "closed": "Closed before expiry",
+    "paused": "Paused: the settings need fixing",
+    "done": "Settled at ${price}",
+    "soon": "Settles within 2 hours · next check {next}"
   }
 }
