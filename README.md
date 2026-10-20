@@ -1,4 +1,17 @@
-# options-lifecycle
+# options-lifecycle — moved
+
+> **This repository is archived. The template now lives in
+> [`butler-skill-yield-notes`](https://github.com/mamamatcha/butler-skill-yield-notes)
+> under `templates/options-lifecycle`, and that is what the registry installs.**
+>
+> | | |
+> | --- | --- |
+> | Registry entry | `options-lifecycle` -> `butler-skill-yield-notes` @ `v2.4.0`, path `templates/options-lifecycle` |
+> | Version there | **v6** (this repo stopped at v5) |
+> | Nothing in `templates.json` or `skills.json` points here any more | |
+>
+> Open issues and changes against the new location. This repo is kept read-only so
+> the `v1`-`v5` tags and their history stay resolvable.
 
 Watches one Derive option from the fill to the outcome: a note the owner **sold** (`acp options open`) or an option they **bought** (`acp options buy`), on any asset Derive lists. The options-trading skill files it once the fill is confirmed, one duty per option.
 
